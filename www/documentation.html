@@ -1,0 +1,112 @@
+<html>
+<head>
+  <title>Auto Sliding Door Driver</title>
+  <style>
+    body { font-family: -apple-system, Helvetica, Arial, sans-serif; font-size: 13px; color: #222; }
+    h2 { margin-top: 18px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+    h3 { margin-top: 14px; color: #444; }
+    code { background: #f4f4f4; padding: 1px 4px; border-radius: 3px; font-family: Menlo, Consolas, monospace; }
+    table { border-collapse: collapse; margin: 6px 0; }
+    th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; vertical-align: top; }
+    th { background: #eee; }
+    ul { padding-left: 20px; }
+  </style>
+</head>
+<body>
+
+<h1>Auto Sliding Door</h1>
+
+<p>Experience-button driver for a motion-sensor-enabled sliding door wired with two contact closures and a position contact sensor.</p>
+
+<h2>Hardware model</h2>
+
+<table>
+  <tr><th>Wire</th><th>Direction</th><th>Behavior</th></tr>
+  <tr><td>Open Door relay</td><td>C4 &rarr; door</td><td>Closed = door slides open; open = closes. Holding closed keeps the door open.</td></tr>
+  <tr><td>Arm Motion relay</td><td>C4 &rarr; door</td><td>Closed = motion sensors armed (they then trigger door open on their own).</td></tr>
+  <tr><td>Door Contact sensor</td><td>door &rarr; C4</td><td>Reports actual door position (open/closed).</td></tr>
+</table>
+
+<h2>Setup</h2>
+
+<ol>
+  <li>Add this driver to your project (System Design &rarr; Search &rarr; <em>Auto Sliding Door</em>).</li>
+  <li>In <strong>Connections &mdash; Control/AV</strong>, bind:
+    <ul>
+      <li><code>Open Door Relay</code> &rarr; your physical relay output that controls the door's open trigger.</li>
+      <li><code>Arm Motion Relay</code> &rarr; your physical relay output that arms the door's built-in motion sensors.</li>
+      <li><code>Door Contact</code> &rarr; the contact sensor on the door (recommended; without it the driver cannot report door position).</li>
+    </ul>
+  </li>
+  <li>Set <strong>Default Open Duration (s)</strong> &mdash; how long the door stays open when programming or the Navigator tile calls "Open Door". Default is 5 seconds.</li>
+  <li>(Optional) Set <strong>Hold Duration (s)</strong> &mdash; a safety auto-release for Hold mode. 0 = unlimited.</li>
+  <li>(Optional) Bind a keypad button via <strong>BUTTON_LINK</strong> connections (<em>Open / Off / Hold / Auto</em>) if you want a single-tap mapping. Most users put programming directly on the keypad button and call the driver's Actions, which is more flexible.</li>
+  <li>To show the experience button in Navigator, enable it in <strong>Room Properties &rarr; Navigator Tab &rarr; Device Visibility</strong> for any room and category.</li>
+</ol>
+
+<h2>Modes</h2>
+
+<table>
+  <tr><th>Mode</th><th>Open Door relay</th><th>Arm Motion relay</th><th>Effect</th></tr>
+  <tr><td>Off</td><td>Open</td><td>Open</td><td>Door closes; motion sensors disarmed.</td></tr>
+  <tr><td>Hold</td><td>Closed</td><td>Open</td><td>Door slides open and stays open until mode changes or Hold Duration elapses.</td></tr>
+  <tr><td>Auto</td><td>Open</td><td>Closed</td><td>Motion sensors armed &mdash; door auto-opens on motion and auto-closes when motion stops.</td></tr>
+</table>
+
+<h2>Actions</h2>
+
+<table>
+  <tr><th>Action</th><th>Description</th></tr>
+  <tr><td>Open Door</td><td>Closes the Open Door relay for the configured <em>Default Open Duration</em>, then releases.</td></tr>
+  <tr><td>Open Door for N Seconds</td><td>Same, but with an explicit <em>Seconds</em> parameter. Reset semantics if called again while a previous timer is running.</td></tr>
+  <tr><td>Set Mode to Off</td><td>Both relays released. Cancels any pending Open timer.</td></tr>
+  <tr><td>Set Mode to Hold (Hold Open)</td><td>Open Door relay held closed. If Hold Duration &gt; 0, auto-releases to Off after that long.</td></tr>
+  <tr><td>Set Mode to Auto (Motion Sensors)</td><td>Arm Motion relay held closed. Open Door relay released.</td></tr>
+  <tr><td>Cancel Pending Open</td><td>Stops any in-flight "Open Door" timer early. Mode unchanged.</td></tr>
+</table>
+
+<h2>Events</h2>
+
+<ul>
+  <li><strong>Mode Changed to Off / Hold / Auto</strong> &mdash; fires when the mode transitions (not on re-set to the same mode).</li>
+  <li><strong>Door Opened / Door Closed</strong> &mdash; from the contact sensor, post-debounce.</li>
+  <li><strong>Still Open</strong> &mdash; if <em>Still Open Time</em> &gt; 0, fires when the door has been open continuously that long.</li>
+</ul>
+
+<h2>Conditions (for "If..." programming blocks)</h2>
+
+<ul>
+  <li><strong>Mode is Off / Hold / Auto</strong></li>
+  <li><strong>Door State is Open / Closed / Unknown</strong></li>
+</ul>
+
+<h2>Variables</h2>
+
+<ul>
+  <li><code>MODE</code> &mdash; string: "Off" / "Hold" / "Auto"</li>
+  <li><code>DOOR_STATE</code> &mdash; string: "Open" / "Closed" / "Unknown"</li>
+</ul>
+
+<h2>Navigator tile</h2>
+
+<p>Tapping the Auto Sliding Door tile in Navigator always calls <em>Open Door</em>. The tile never changes mode &mdash; mode changes only happen via keypad, voice, or programming. The tile's icon swaps based on current mode (gray = Off, amber = Hold, green = Auto).</p>
+
+<h2>Keypad LED feedback</h2>
+
+<p>If you bind a Control4 keypad button to one of the BUTTON_LINK connections, its LED color reflects the current mode (configurable via the <em>Off / Hold / Auto LED Color</em> properties).</p>
+
+<h2>Behavior notes</h2>
+
+<ul>
+  <li>Setting the same mode that's already active is a no-op &mdash; events do not re-fire, LEDs do not re-flash.</li>
+  <li>Any mode change cancels any pending Open-for-N timer.</li>
+  <li>Calling Open Door while in Hold is harmless &mdash; the relay is already closed; the timer expires uneventfully.</li>
+  <li>After a Director restart, the driver wakes up in Off with both relays released.</li>
+</ul>
+
+<h2>Troubleshooting</h2>
+
+<p>Set <strong>Debug Mode</strong> to <em>On</em> to see verbose Lua output in Composer's Lua Output pane.</p>
+
+</body>
+</html>

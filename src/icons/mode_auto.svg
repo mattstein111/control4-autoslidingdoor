@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">
+  <!-- Auto Sliding Door :: Mode Auto  (door open + motion-sensor waves, green) -->
+  <g fill="none" stroke="#10b981" stroke-width="40" stroke-linejoin="round" stroke-linecap="round">
+    <!-- Door frame -->
+    <rect x="160" y="170" width="680" height="660" rx="12"/>
+    <!-- Top track -->
+    <line x1="180" y1="240" x2="820" y2="240"/>
+    <!-- Bottom track -->
+    <line x1="180" y1="760" x2="820" y2="760"/>
+    <!-- Left panel slid LEFT -->
+    <rect x="80"  y="240" width="290" height="520"/>
+    <!-- Right panel slid RIGHT -->
+    <rect x="630" y="240" width="290" height="520"/>
+  </g>
+  <!-- Motion-sensor arcs in the open doorway (concentric "radar" arcs facing down) -->
+  <g fill="none" stroke="#10b981" stroke-width="34" stroke-linecap="round">
+    <path d="M 420 360 Q 500 320 580 360"/>
+    <path d="M 380 450 Q 500 380 620 450"/>
+    <path d="M 340 540 Q 500 440 660 540"/>
+  </g>
+  <!-- Sensor "eye" dot -->
+  <circle cx="500" cy="290" r="22" fill="#10b981"/>
+</svg>

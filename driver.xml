@@ -1,0 +1,439 @@
+<devicedata>
+  <copyright>Copyright 2026 Matt Stein. Released under MIT.</copyright>
+  <manufacturer>Stein</manufacturer>
+  <name>Auto Sliding Door</name>
+  <model>Motion + Hold Experience Button</model>
+  <creator>Matt Stein</creator>
+  <created>05/26/2026 12:00 PM</created>
+  <modified>05/26/2026 12:00 PM</modified>
+  <version>1</version>
+  <control>lua_gen</control>
+  <driver>DriverWorks</driver>
+  <auto_update>false</auto_update>
+  <minimum_auto_update_version>1</minimum_auto_update_version>
+  <minimum_os_version>2.9.0</minimum_os_version>
+  <small image_source="c4z">icons/device_sm.png</small>
+  <large image_source="c4z">icons/device_lg.png</large>
+  <config>
+    <script file="driver.lua"/>
+    <documentation file="www/documentation.html"/>
+    <conditionals>
+      <conditional>
+        <id>1</id>
+        <name>Mode</name>
+        <type>LIST</type>
+        <condition_statement>Mode</condition_statement>
+        <description>NAME Mode is LOGIC STRING</description>
+        <items>
+          <item>Off</item>
+          <item>Hold</item>
+          <item>Auto</item>
+        </items>
+      </conditional>
+      <conditional>
+        <id>2</id>
+        <name>Door State</name>
+        <type>LIST</type>
+        <condition_statement>Door State</condition_statement>
+        <description>NAME Door is LOGIC STRING</description>
+        <items>
+          <item>Open</item>
+          <item>Closed</item>
+          <item>Unknown</item>
+        </items>
+      </conditional>
+    </conditionals>
+    <properties>
+      <property>
+        <name>Driver Version</name>
+        <default/>
+        <type>STRING</type>
+        <readonly>true</readonly>
+      </property>
+      <property>
+        <name>Debug Mode</name>
+        <type>LIST</type>
+        <items>
+          <item>Off</item>
+          <item>On</item>
+        </items>
+        <default>Off</default>
+        <readonly>false</readonly>
+        <tooltip>Verbose Lua output for troubleshooting.</tooltip>
+      </property>
+      <property>
+        <name>Mode</name>
+        <default>Off</default>
+        <type>STRING</type>
+        <readonly>true</readonly>
+        <tooltip>Current sustained mode (Off / Hold / Auto). Read-only mirror of the MODE variable.</tooltip>
+      </property>
+      <property>
+        <name>Door State</name>
+        <default>Unknown</default>
+        <type>STRING</type>
+        <readonly>true</readonly>
+        <tooltip>Current door position from the contact sensor. Read-only mirror of the DOOR_STATE variable.</tooltip>
+      </property>
+      <property>
+        <name>Contact Status</name>
+        <default/>
+        <type>STRING</type>
+        <readonly>true</readonly>
+        <tooltip>Reports whether the door contact sensor binding is wired.</tooltip>
+      </property>
+      <property>
+        <name>Default Open Duration (s)</name>
+        <type>RANGED_INTEGER</type>
+        <readonly>false</readonly>
+        <default>5</default>
+        <minimum>1</minimum>
+        <maximum>600</maximum>
+        <tooltip>How long Relay A is held closed by the 'Open Door' action when no override is supplied. (default 5)</tooltip>
+      </property>
+      <property>
+        <name>Hold Duration (s)</name>
+        <type>RANGED_INTEGER</type>
+        <readonly>false</readonly>
+        <default>0</default>
+        <minimum>0</minimum>
+        <maximum>3600</maximum>
+        <tooltip>If non-zero, Hold mode auto-releases to Off after this many seconds. 0 = unlimited (Hold stays until explicit release). (default 0)</tooltip>
+      </property>
+      <property>
+        <name>Still Open Time (s)</name>
+        <type>RANGED_INTEGER</type>
+        <readonly>false</readonly>
+        <default>0</default>
+        <minimum>0</minimum>
+        <maximum>3600</maximum>
+        <tooltip>If non-zero, fires the 'Still Open' event when the door has been continuously open this many seconds. 0 = disabled. (default 0)</tooltip>
+      </property>
+      <property>
+        <name>Invert Open Door Relay</name>
+        <type>LIST</type>
+        <items>
+          <item>No</item>
+          <item>Yes</item>
+        </items>
+        <default>No</default>
+        <readonly>false</readonly>
+        <tooltip>Set to Yes if the open relay must be OPENED to slide the door open (normally-closed wiring). (default No)</tooltip>
+      </property>
+      <property>
+        <name>Invert Arm Motion Relay</name>
+        <type>LIST</type>
+        <items>
+          <item>No</item>
+          <item>Yes</item>
+        </items>
+        <default>No</default>
+        <readonly>false</readonly>
+        <tooltip>Set to Yes if the arm-motion relay must be OPENED to arm the motion sensors. (default No)</tooltip>
+      </property>
+      <property>
+        <name>Invert Door Contact</name>
+        <type>LIST</type>
+        <items>
+          <item>No</item>
+          <item>Yes</item>
+        </items>
+        <default>No</default>
+        <readonly>false</readonly>
+        <tooltip>Set to Yes if the contact OPENS when the door is open (normally-closed sensor). (default No)</tooltip>
+      </property>
+      <property>
+        <name>Door Contact Debounce (ms)</name>
+        <type>RANGED_INTEGER</type>
+        <readonly>false</readonly>
+        <default>250</default>
+        <minimum>1</minimum>
+        <maximum>1000</maximum>
+        <tooltip>Ignore additional contact state changes for this many milliseconds after a change, to suppress contact bounce. (default 250)</tooltip>
+      </property>
+      <property>
+        <name>Off LED Color</name>
+        <type>COLOR_SELECTOR</type>
+        <default>0,0,200</default>
+        <readonly>false</readonly>
+        <tooltip>Color of bound keypad button LEDs when current mode is Off.</tooltip>
+      </property>
+      <property>
+        <name>Hold LED Color</name>
+        <type>COLOR_SELECTOR</type>
+        <default>200,200,0</default>
+        <readonly>false</readonly>
+        <tooltip>Color of bound keypad button LEDs when current mode is Hold.</tooltip>
+      </property>
+      <property>
+        <name>Auto LED Color</name>
+        <type>COLOR_SELECTOR</type>
+        <default>0,200,0</default>
+        <readonly>false</readonly>
+        <tooltip>Color of bound keypad button LEDs when current mode is Auto.</tooltip>
+      </property>
+    </properties>
+    <commands>
+      <command>
+        <name>OPEN_DEFAULT</name>
+        <description>Open NAME for default duration</description>
+      </command>
+      <command>
+        <name>OPEN_FOR_N</name>
+        <description>Open NAME for N seconds</description>
+        <params>
+          <param>
+            <name>Seconds</name>
+            <type>RANGED_INTEGER</type>
+            <minimum>1</minimum>
+            <maximum>600</maximum>
+            <default>5</default>
+          </param>
+        </params>
+      </command>
+      <command>
+        <name>SET_MODE_OFF</name>
+        <description>Set NAME mode to Off</description>
+      </command>
+      <command>
+        <name>SET_MODE_HOLD</name>
+        <description>Set NAME mode to Hold</description>
+      </command>
+      <command>
+        <name>SET_MODE_AUTO</name>
+        <description>Set NAME mode to Auto</description>
+      </command>
+      <command>
+        <name>CANCEL_OPEN</name>
+        <description>Cancel any pending Open-for-N timer on NAME</description>
+      </command>
+    </commands>
+    <actions>
+      <action>
+        <name>Open Door</name>
+        <command>OPEN_DEFAULT</command>
+      </action>
+      <action>
+        <name>Open Door for N Seconds</name>
+        <command>OPEN_FOR_N</command>
+      </action>
+      <action>
+        <name>Set Mode to Off</name>
+        <command>SET_MODE_OFF</command>
+      </action>
+      <action>
+        <name>Set Mode to Hold (Hold Open)</name>
+        <command>SET_MODE_HOLD</command>
+      </action>
+      <action>
+        <name>Set Mode to Auto (Motion Sensors)</name>
+        <command>SET_MODE_AUTO</command>
+      </action>
+      <action>
+        <name>Cancel Pending Open</name>
+        <command>CANCEL_OPEN</command>
+      </action>
+    </actions>
+  </config>
+  <events>
+    <event>
+      <id>1</id>
+      <name>Mode Changed to Off</name>
+      <description>When the NAME mode changes to Off</description>
+    </event>
+    <event>
+      <id>2</id>
+      <name>Mode Changed to Hold</name>
+      <description>When the NAME mode changes to Hold</description>
+    </event>
+    <event>
+      <id>3</id>
+      <name>Mode Changed to Auto</name>
+      <description>When the NAME mode changes to Auto</description>
+    </event>
+    <event>
+      <id>4</id>
+      <name>Door Opened</name>
+      <description>When the NAME door is opened (from contact sensor)</description>
+    </event>
+    <event>
+      <id>5</id>
+      <name>Door Closed</name>
+      <description>When the NAME door is closed (from contact sensor)</description>
+    </event>
+    <event>
+      <id>6</id>
+      <name>Still Open</name>
+      <description>When the NAME door has been open longer than the 'Still Open Time' property</description>
+    </event>
+  </events>
+  <capabilities>
+    <DeviceType>Door</DeviceType>
+    <navigator_display_option proxybindingid="5001">
+      <display_icons>
+        <Icon width="70" height="70">controller://driver/autoslidingdoor/icons/device/mode_off/experience_70.png</Icon>
+        <Icon width="90" height="90">controller://driver/autoslidingdoor/icons/device/mode_off/experience_90.png</Icon>
+        <Icon width="300" height="300">controller://driver/autoslidingdoor/icons/device/mode_off/experience_300.png</Icon>
+        <Icon width="512" height="512">controller://driver/autoslidingdoor/icons/device/mode_off/experience_512.png</Icon>
+        <Icon width="1024" height="1024">controller://driver/autoslidingdoor/icons/device/mode_off/experience_1024.png</Icon>
+        <state id="Mode_Off">
+          <Icon width="70" height="70">controller://driver/autoslidingdoor/icons/device/mode_off/experience_70.png</Icon>
+          <Icon width="90" height="90">controller://driver/autoslidingdoor/icons/device/mode_off/experience_90.png</Icon>
+          <Icon width="300" height="300">controller://driver/autoslidingdoor/icons/device/mode_off/experience_300.png</Icon>
+          <Icon width="512" height="512">controller://driver/autoslidingdoor/icons/device/mode_off/experience_512.png</Icon>
+          <Icon width="1024" height="1024">controller://driver/autoslidingdoor/icons/device/mode_off/experience_1024.png</Icon>
+        </state>
+        <state id="Mode_Hold">
+          <Icon width="70" height="70">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_70.png</Icon>
+          <Icon width="90" height="90">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_90.png</Icon>
+          <Icon width="300" height="300">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_300.png</Icon>
+          <Icon width="512" height="512">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_512.png</Icon>
+          <Icon width="1024" height="1024">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_1024.png</Icon>
+        </state>
+        <state id="Mode_Auto">
+          <Icon width="70" height="70">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_70.png</Icon>
+          <Icon width="90" height="90">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_90.png</Icon>
+          <Icon width="300" height="300">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_300.png</Icon>
+          <Icon width="512" height="512">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_512.png</Icon>
+          <Icon width="1024" height="1024">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_1024.png</Icon>
+        </state>
+      </display_icons>
+    </navigator_display_option>
+  </capabilities>
+  <composer_categories>
+    <category>Motorization</category>
+  </composer_categories>
+  <proxies>
+    <proxy proxybindingid="5001" name="Auto Sliding Door">uibutton</proxy>
+  </proxies>
+  <connections>
+    <connection>
+      <id>5001</id>
+      <facing>6</facing>
+      <connectionname>UIBUTTON</connectionname>
+      <type>2</type>
+      <consumer>False</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <classname>UIBUTTON</classname>
+        </class>
+      </classes>
+    </connection>
+    <connection>
+      <id>100</id>
+      <facing>6</facing>
+      <connectionname>Open Door Relay</connectionname>
+      <type>1</type>
+      <consumer>True</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>True</linelevel>
+      <classes>
+        <class>
+          <classname>RELAY</classname>
+        </class>
+      </classes>
+    </connection>
+    <connection>
+      <id>101</id>
+      <facing>6</facing>
+      <connectionname>Arm Motion Relay</connectionname>
+      <type>1</type>
+      <consumer>True</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>True</linelevel>
+      <classes>
+        <class>
+          <classname>RELAY</classname>
+        </class>
+      </classes>
+    </connection>
+    <connection>
+      <id>200</id>
+      <facing>6</facing>
+      <connectionname>Door Contact</connectionname>
+      <type>1</type>
+      <consumer>True</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>True</linelevel>
+      <classes>
+        <class>
+          <classname>CONTACT_SENSOR</classname>
+        </class>
+      </classes>
+    </connection>
+    <connection>
+      <id>500</id>
+      <facing>6</facing>
+      <connectionname>Open</connectionname>
+      <type>1</type>
+      <consumer>False</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <classname>BUTTON_LINK</classname>
+          <autobind>False</autobind>
+        </class>
+      </classes>
+      <hidden>False</hidden>
+    </connection>
+    <connection>
+      <id>501</id>
+      <facing>6</facing>
+      <connectionname>Off</connectionname>
+      <type>1</type>
+      <consumer>False</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <classname>BUTTON_LINK</classname>
+          <autobind>False</autobind>
+        </class>
+      </classes>
+      <hidden>False</hidden>
+    </connection>
+    <connection>
+      <id>502</id>
+      <facing>6</facing>
+      <connectionname>Hold</connectionname>
+      <type>1</type>
+      <consumer>False</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <classname>BUTTON_LINK</classname>
+          <autobind>False</autobind>
+        </class>
+      </classes>
+      <hidden>False</hidden>
+    </connection>
+    <connection>
+      <id>503</id>
+      <facing>6</facing>
+      <connectionname>Auto</connectionname>
+      <type>1</type>
+      <consumer>False</consumer>
+      <audiosource>False</audiosource>
+      <videosource>False</videosource>
+      <linelevel>False</linelevel>
+      <classes>
+        <class>
+          <classname>BUTTON_LINK</classname>
+          <autobind>False</autobind>
+        </class>
+      </classes>
+      <hidden>False</hidden>
+    </connection>
+  </connections>
+</devicedata>
