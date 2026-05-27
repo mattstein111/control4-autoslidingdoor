@@ -6,7 +6,7 @@
   See docs/superpowers/specs/ for the full design spec.
 --]]
 
-local DRIVER_VERSION = "2.0.0"
+local DRIVER_VERSION = "2.0.1"
 
 -- Connection IDs (must match driver.xml)
 local PROXY_ID            = 5001
@@ -447,6 +447,50 @@ local function updateContactStatus()
   end
 end
 
+-- Query the current bound state of one of our consumer bindings.
+-- Used at init time because OnBindingChanged is NOT re-fired for bindings
+-- that were already established before the driver code reloaded (issue #1).
+local function isBindingWired(idBinding)
+  local ok, providerBinding = pcall(function()
+    return C4:GetBoundProviderBinding(C4:GetDeviceID(), idBinding)
+  end)
+  if not ok then
+    dbg("GetBoundProviderBinding failed for", idBinding, "-", tostring(providerBinding))
+    return false
+  end
+  return (providerBinding or 0) ~= 0
+end
+
+-- Re-seed all binding-state flags from Director and run any first-time
+-- side effects (query sensor, recompute relays). Safe to call repeatedly.
+local function syncBindingState()
+  local prevSensor = STATE.sensor_bound
+  local prevOpen   = STATE.open_relay_bound
+  local prevArm    = STATE.arm_relay_bound
+
+  STATE.sensor_bound     = isBindingWired(SENSOR_ID)
+  STATE.open_relay_bound = isBindingWired(OPEN_RELAY_ID)
+  STATE.arm_relay_bound  = isBindingWired(ARM_RELAY_ID)
+
+  dbg("syncBindingState sensor=", tostring(STATE.sensor_bound),
+      "open=", tostring(STATE.open_relay_bound),
+      "arm=", tostring(STATE.arm_relay_bound))
+
+  updateContactStatus()
+
+  -- If sensor just became visible, ask it for current state.
+  if STATE.sensor_bound and not prevSensor then
+    C4:SendToProxy(SENSOR_ID, "GET_STATE", {})
+  elseif (not STATE.sensor_bound) and prevSensor then
+    STATE.door = "Unknown"
+    publishDoor()
+  end
+
+  -- If relays just became visible, push current desired state to them.
+  if STATE.open_relay_bound and not prevOpen then recomputeOpenRelay() end
+  if STATE.arm_relay_bound  and not prevArm  then recomputeArmRelay()  end
+end
+
 -- ============================================================================
 -- Action dispatch (Composer/voice/programming → driver)
 -- ============================================================================
@@ -536,22 +580,9 @@ end
 
 function OnBindingChanged(idBinding, strClass, bIsBound)
   dbg("OnBindingChanged binding=", idBinding, "class=", strClass, "bound=", tostring(bIsBound))
-  if idBinding == SENSOR_ID then
-    STATE.sensor_bound = bIsBound
-    updateContactStatus()
-    if bIsBound then
-      C4:SendToProxy(SENSOR_ID, "GET_STATE", {})
-    else
-      STATE.door = "Unknown"
-      publishDoor()
-    end
-  elseif idBinding == OPEN_RELAY_ID then
-    STATE.open_relay_bound = bIsBound
-    if bIsBound then recomputeOpenRelay() end
-  elseif idBinding == ARM_RELAY_ID then
-    STATE.arm_relay_bound = bIsBound
-    if bIsBound then recomputeArmRelay() end
-  end
+  -- Defer to the canonical reseed path. Director's view is authoritative;
+  -- bIsBound is informational. syncBindingState handles all the side effects.
+  syncBindingState()
 end
 
 function OnTimerExpired(idTimer)
@@ -653,10 +684,11 @@ function OnDriverLateInit()
   C4:SetVariable("MODE", STATE.mode)
   C4:SetVariable("DOOR_STATE", STATE.door)
 
-  -- If sensor is already bound (e.g., driver hot-reload), query state.
-  if STATE.sensor_bound then
-    C4:SendToProxy(SENSOR_ID, "GET_STATE", {})
-  end
+  -- Critical: query Director for current binding state. OnBindingChanged is
+  -- not re-fired for bindings that existed before this driver code loaded
+  -- (issue #1). Without this, all *_bound flags stay false and the driver
+  -- silently drops every relay command and sensor query.
+  syncBindingState()
 end
 
 function OnDriverDestroyed()

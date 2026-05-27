@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.0.1 — 2026-05-27
+
+- **Fix [#1](https://github.com/mattstein111/control4-autoslidingdoor/issues/1):** driver was inert after install when bindings already existed. `OnBindingChanged` is not re-fired for pre-existing bindings when Composer reloads a driver; the driver now queries `C4:GetBoundProviderBinding` in `OnDriverLateInit` to seed binding state, then pushes desired relay outputs and queries sensor state.
+
 ## v2 — 2026-05-26
 
 - **New: built-in gesture decoder.** Two new Actions (`On Button Pressed`, `On Button Released`) let a physical button drive the door without any custom timer/variable programming. Internal state machine maps:
