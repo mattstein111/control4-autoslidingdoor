@@ -1,9 +1,5 @@
 # Changelog
 
-## v2.1 — 2026-05-27
-
-- **New ([#2](https://github.com/mattstein111/control4-autoslidingdoor/issues/2)):** three additional Navigator tiles, one per mode (Off / Hold / Auto). Tapping a mode tile sets that mode. Lets users change mode from inside the Control4 app without needing keypad / voice / programming. Main door tile (tap = Open Door) unchanged. Show or hide each tile independently per room via Device Visibility.
-
 ## v2.0.1 — 2026-05-27
 
 - **Fix [#1](https://github.com/mattstein111/control4-autoslidingdoor/issues/1):** driver was inert after install when bindings already existed. `OnBindingChanged` is not re-fired for pre-existing bindings when Composer reloads a driver; the driver now queries `C4:GetBoundProviderBinding` in `OnDriverLateInit` to seed binding state, then pushes desired relay outputs and queries sensor state.

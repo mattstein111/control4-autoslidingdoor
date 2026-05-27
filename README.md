@@ -29,7 +29,7 @@ This driver collapses the whole thing into one experience button with a real sta
 - **Three sustained modes** (Off / Hold / Auto) with a single canonical state variable
 - **Open Door for N Seconds** action with reset-on-retrigger semantics
 - **Built-in gesture decoder** — wire a physical button's Press and Release events to two actions and you get single / double / long-press behavior with zero custom timers or variables
-- **Mode-aware Navigator tiles** — main tile (tap = Open Door) swaps gray / amber / green to reflect current mode; three additional dedicated mode tiles (Off / Hold / Auto) for in-app mode selection — show or hide each per-room independently
+- **Mode-aware Navigator tile** — icon swaps gray / amber / green
 - **Keypad LED integration** — bound keypad button LEDs auto-recolor per mode (configurable)
 - **Door-position aware** — consumes the contact sensor, fires `Door Opened` / `Door Closed` events, optional `Still Open` watchdog
 - **Tunable everything** — default open duration, Hold auto-release timer, contact debounce, gesture thresholds, per-mode colors

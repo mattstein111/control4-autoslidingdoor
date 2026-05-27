@@ -109,23 +109,9 @@
   <li><code>DOOR_STATE</code> &mdash; string: "Open" / "Closed" / "Unknown"</li>
 </ul>
 
-<h2>Navigator tiles</h2>
+<h2>Navigator tile</h2>
 
-<p>The driver exposes four separate tiles for Navigator. Show or hide each independently per room via Room Properties &rarr; Navigator Tab &rarr; Device Visibility.</p>
-
-<table>
-  <tr><th>Tile</th><th>Tap behavior</th><th>Icon</th></tr>
-  <tr><td><strong>Auto Sliding Door</strong></td><td>Open Door (calls <em>Open Door</em> with default duration)</td><td>Mode-driven &mdash; swaps gray / amber / green to reflect current mode</td></tr>
-  <tr><td><strong>Sliding Door &mdash; Off</strong></td><td>Set Mode to Off</td><td>Static gray (Off icon)</td></tr>
-  <tr><td><strong>Sliding Door &mdash; Hold</strong></td><td>Set Mode to Hold</td><td>Static amber (Hold icon)</td></tr>
-  <tr><td><strong>Sliding Door &mdash; Auto</strong></td><td>Set Mode to Auto</td><td>Static green (Auto icon)</td></tr>
-</table>
-
-<p>The main door tile never changes mode &mdash; it's dedicated to <em>Open Door</em> so casual users (guests, kids) can let themselves out without accidentally locking the door open. Mode selection is on the three dedicated mode tiles.</p>
-
-<p>Typical install: show all four tiles in the kitchen / control room, and only the main door tile in less-central rooms.</p>
-
-<p>Setting a mode you're already in is a no-op &mdash; no event re-fires.</p>
+<p>Tapping the Auto Sliding Door tile in Navigator always calls <em>Open Door</em>. The tile never changes mode &mdash; mode changes only happen via keypad, voice, or programming. The tile's icon swaps based on current mode (gray = Off, amber = Hold, green = Auto).</p>
 
 <h2>Keypad LED feedback</h2>
 

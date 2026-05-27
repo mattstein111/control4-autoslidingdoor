@@ -5,8 +5,8 @@
   <model>Motion + Hold Experience Button</model>
   <creator>Matt Stein</creator>
   <created>05/26/2026 12:00 PM</created>
-  <modified>05/27/2026 11:00 AM</modified>
-  <version>6</version>
+  <modified>05/27/2026 09:00 AM</modified>
+  <version>5</version>
   <control>lua_gen</control>
   <driver>DriverWorks</driver>
   <auto_update>false</auto_update>
@@ -333,91 +333,16 @@
         </state>
       </display_icons>
     </navigator_display_option>
-    <navigator_display_option proxybindingid="5002">
-      <display_icons>
-        <Icon width="70" height="70">controller://driver/autoslidingdoor/icons/device/mode_off/experience_70.png</Icon>
-        <Icon width="90" height="90">controller://driver/autoslidingdoor/icons/device/mode_off/experience_90.png</Icon>
-        <Icon width="300" height="300">controller://driver/autoslidingdoor/icons/device/mode_off/experience_300.png</Icon>
-        <Icon width="512" height="512">controller://driver/autoslidingdoor/icons/device/mode_off/experience_512.png</Icon>
-        <Icon width="1024" height="1024">controller://driver/autoslidingdoor/icons/device/mode_off/experience_1024.png</Icon>
-      </display_icons>
-    </navigator_display_option>
-    <navigator_display_option proxybindingid="5003">
-      <display_icons>
-        <Icon width="70" height="70">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_70.png</Icon>
-        <Icon width="90" height="90">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_90.png</Icon>
-        <Icon width="300" height="300">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_300.png</Icon>
-        <Icon width="512" height="512">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_512.png</Icon>
-        <Icon width="1024" height="1024">controller://driver/autoslidingdoor/icons/device/mode_hold/experience_1024.png</Icon>
-      </display_icons>
-    </navigator_display_option>
-    <navigator_display_option proxybindingid="5004">
-      <display_icons>
-        <Icon width="70" height="70">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_70.png</Icon>
-        <Icon width="90" height="90">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_90.png</Icon>
-        <Icon width="300" height="300">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_300.png</Icon>
-        <Icon width="512" height="512">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_512.png</Icon>
-        <Icon width="1024" height="1024">controller://driver/autoslidingdoor/icons/device/mode_auto/experience_1024.png</Icon>
-      </display_icons>
-    </navigator_display_option>
   </capabilities>
   <composer_categories>
     <category>Motorization</category>
   </composer_categories>
   <proxies>
     <proxy proxybindingid="5001" name="Auto Sliding Door">uibutton</proxy>
-    <proxy proxybindingid="5002" name="Sliding Door — Off">uibutton</proxy>
-    <proxy proxybindingid="5003" name="Sliding Door — Hold">uibutton</proxy>
-    <proxy proxybindingid="5004" name="Sliding Door — Auto">uibutton</proxy>
   </proxies>
   <connections>
     <connection>
       <id>5001</id>
-      <facing>6</facing>
-      <connectionname>UIBUTTON</connectionname>
-      <type>2</type>
-      <consumer>False</consumer>
-      <audiosource>False</audiosource>
-      <videosource>False</videosource>
-      <linelevel>False</linelevel>
-      <classes>
-        <class>
-          <classname>UIBUTTON</classname>
-        </class>
-      </classes>
-    </connection>
-    <connection>
-      <id>5002</id>
-      <facing>6</facing>
-      <connectionname>UIBUTTON</connectionname>
-      <type>2</type>
-      <consumer>False</consumer>
-      <audiosource>False</audiosource>
-      <videosource>False</videosource>
-      <linelevel>False</linelevel>
-      <classes>
-        <class>
-          <classname>UIBUTTON</classname>
-        </class>
-      </classes>
-    </connection>
-    <connection>
-      <id>5003</id>
-      <facing>6</facing>
-      <connectionname>UIBUTTON</connectionname>
-      <type>2</type>
-      <consumer>False</consumer>
-      <audiosource>False</audiosource>
-      <videosource>False</videosource>
-      <linelevel>False</linelevel>
-      <classes>
-        <class>
-          <classname>UIBUTTON</classname>
-        </class>
-      </classes>
-    </connection>
-    <connection>
-      <id>5004</id>
       <facing>6</facing>
       <connectionname>UIBUTTON</connectionname>
       <type>2</type>
