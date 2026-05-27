@@ -6,10 +6,13 @@
   See docs/superpowers/specs/ for the full design spec.
 --]]
 
-local DRIVER_VERSION = "2.0.1"
+local DRIVER_VERSION = "2.1.0"
 
 -- Connection IDs (must match driver.xml)
-local PROXY_ID            = 5001
+local PROXY_ID            = 5001   -- main "Auto Sliding Door" tile (tap = Open Door)
+local PROXY_MODE_OFF      = 5002   -- per-mode tiles (tap = Set Mode to that mode)
+local PROXY_MODE_HOLD     = 5003
+local PROXY_MODE_AUTO     = 5004
 local OPEN_RELAY_ID       = 100
 local ARM_RELAY_ID        = 101
 local SENSOR_ID           = 200
@@ -528,9 +531,21 @@ end
 
 PROXY_CMDS = {}
 
--- Navigator tile click on the experience button
-function PROXY_CMDS.DO_CLICK(tParams, idBinding) OpenForN(CFG.default_open_seconds) end
-function PROXY_CMDS.SELECT(tParams, idBinding)   OpenForN(CFG.default_open_seconds) end
+-- Navigator tile click. Dispatch by which tile was tapped:
+--   PROXY_ID (5001)         main door tile  -> Open Door (default duration)
+--   PROXY_MODE_OFF  (5002)  Off tile        -> Set Mode to Off
+--   PROXY_MODE_HOLD (5003)  Hold tile       -> Set Mode to Hold
+--   PROXY_MODE_AUTO (5004)  Auto tile       -> Set Mode to Auto
+local function handleTileTap(idBinding)
+  if     idBinding == PROXY_MODE_OFF  then SetMode("Off",  true)
+  elseif idBinding == PROXY_MODE_HOLD then SetMode("Hold", true)
+  elseif idBinding == PROXY_MODE_AUTO then SetMode("Auto", true)
+  else                                     OpenForN(CFG.default_open_seconds)
+  end
+end
+
+function PROXY_CMDS.DO_CLICK(tParams, idBinding) handleTileTap(idBinding) end
+function PROXY_CMDS.SELECT(tParams, idBinding)   handleTileTap(idBinding) end
 
 -- Contact sensor reports
 function PROXY_CMDS.OPENED(tParams, idBinding)
