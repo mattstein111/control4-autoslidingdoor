@@ -1,5 +1,14 @@
 # Changelog
 
+## v2 — 2026-05-26
+
+- **New: built-in gesture decoder.** Two new Actions (`On Button Pressed`, `On Button Released`) let a physical button drive the door without any custom timer/variable programming. Internal state machine maps:
+  - Single press → Open Door (if Off) / Set Mode to Off (if Hold or Auto)
+  - Double press → Set Mode to Auto
+  - Long press → Set Mode to Hold
+- New properties: `Long Press Threshold (ms)` (default 1000) and `Double Click Window (ms)` (default 400) to tune the decoder.
+- All v1 granular actions remain available for voice / scenes / advanced programming.
+
 ## v1 — 2026-05-26
 
 Initial release.

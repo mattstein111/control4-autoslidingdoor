@@ -5,8 +5,8 @@
   <model>Motion + Hold Experience Button</model>
   <creator>Matt Stein</creator>
   <created>05/26/2026 12:00 PM</created>
-  <modified>05/26/2026 12:00 PM</modified>
-  <version>1</version>
+  <modified>05/26/2026 03:30 PM</modified>
+  <version>2</version>
   <control>lua_gen</control>
   <driver>DriverWorks</driver>
   <auto_update>false</auto_update>
@@ -152,6 +152,24 @@
         <tooltip>Ignore additional contact state changes for this many milliseconds after a change, to suppress contact bounce. (default 250)</tooltip>
       </property>
       <property>
+        <name>Long Press Threshold (ms)</name>
+        <type>RANGED_INTEGER</type>
+        <readonly>false</readonly>
+        <default>1000</default>
+        <minimum>200</minimum>
+        <maximum>3000</maximum>
+        <tooltip>How long the button must be held before the gesture decoder triggers Hold mode. Only used by 'On Button Pressed' / 'On Button Released' actions. (default 1000)</tooltip>
+      </property>
+      <property>
+        <name>Double Click Window (ms)</name>
+        <type>RANGED_INTEGER</type>
+        <readonly>false</readonly>
+        <default>400</default>
+        <minimum>100</minimum>
+        <maximum>1000</maximum>
+        <tooltip>How long the gesture decoder waits after a short press for a possible second press (double-click). Only used by 'On Button Pressed' / 'On Button Released' actions. (default 400)</tooltip>
+      </property>
+      <property>
         <name>Off LED Color</name>
         <type>COLOR_SELECTOR</type>
         <default>0,0,200</default>
@@ -207,6 +225,14 @@
         <name>CANCEL_OPEN</name>
         <description>Cancel any pending Open-for-N timer on NAME</description>
       </command>
+      <command>
+        <name>BUTTON_PRESSED</name>
+        <description>Notify NAME that a bound physical button has been pressed (drives gesture decoding)</description>
+      </command>
+      <command>
+        <name>BUTTON_RELEASED</name>
+        <description>Notify NAME that a bound physical button has been released (drives gesture decoding)</description>
+      </command>
     </commands>
     <actions>
       <action>
@@ -232,6 +258,14 @@
       <action>
         <name>Cancel Pending Open</name>
         <command>CANCEL_OPEN</command>
+      </action>
+      <action>
+        <name>On Button Pressed</name>
+        <command>BUTTON_PRESSED</command>
+      </action>
+      <action>
+        <name>On Button Released</name>
+        <command>BUTTON_RELEASED</command>
       </action>
     </actions>
   </config>

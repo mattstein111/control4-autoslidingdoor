@@ -7,6 +7,22 @@
 
 ---
 
+## v2 amendment (2026-05-26)
+
+After installing v1, the user evaluated the cost of wiring the gesture state machine (single / double / long-press) in keypad button programming and decided to push the decoder into the driver. v2 adds, on top of the existing v1 surface:
+
+- **Two new actions:** `On Button Pressed`, `On Button Released`. Caller wires their physical button's Press event → On Button Pressed and Release event → On Button Released. No custom timers or variables required on the caller side.
+- **Two new properties:** `Long Press Threshold (ms)` (default 1000) and `Double Click Window (ms)` (default 400).
+- **Internal gesture state machine** (in `driver.lua`) decodes:
+  - Single press (no second press within double-click window) → if MODE == Off, call `OpenForN`; else call `SetMode("Off")`.
+  - Double press → `SetMode("Auto")`.
+  - Long press → `SetMode("Hold")` the moment the threshold elapses (before release).
+- Existing granular actions (`Open Door`, `Set Mode to X`, `Cancel Pending Open`) remain available for voice, scenes, and advanced programming. Granular and gesture surfaces coexist; nothing was removed.
+
+The original §3 "only granular actions" decision was overturned by user pivot. The gesture decoder is layered on top, not a replacement.
+
+---
+
 ## 1. Use case
 
 A residential sliding door with motion-driven auto-opening, controlled from Control4 via two relays and a contact sensor. Need a single Navigator/Composer surface that exposes door behavior as three sustained modes plus a one-shot timed-open action, and provides clean programming hooks (events, conditions, actions) so a physical keypad button can drive the door and other programming can react to mode changes (announcements, lights).

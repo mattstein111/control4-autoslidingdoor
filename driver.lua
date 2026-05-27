@@ -6,7 +6,7 @@
   See docs/superpowers/specs/ for the full design spec.
 --]]
 
-local DRIVER_VERSION = "1.0.0"
+local DRIVER_VERSION = "2.0.0"
 
 -- Connection IDs (must match driver.xml)
 local PROXY_ID            = 5001
@@ -34,6 +34,14 @@ local STATE = {
   arm_relay_bound  = false,
 }
 
+-- Gesture-decoder state. Drives On Button Pressed / On Button Released actions.
+local GESTURE = {
+  long_press_fired   = false,
+  waiting_for_double = false,
+  long_press_timer   = nil,
+  double_click_timer = nil,
+}
+
 -- Property cache; values get refreshed from Properties[] on init and on changes
 local CFG = {
   debug                = false,
@@ -44,6 +52,8 @@ local CFG = {
   invert_arm_relay     = false,
   invert_contact       = false,
   debounce_ms          = 250,
+  long_press_ms        = 1000,
+  double_click_ms      = 400,
   led_color_off        = "0,0,200",
   led_color_hold       = "200,200,0",
   led_color_auto       = "0,200,0",
@@ -90,6 +100,8 @@ local function refreshConfig()
   CFG.invert_arm_relay     = asBool(Properties["Invert Arm Motion Relay"])
   CFG.invert_contact       = asBool(Properties["Invert Door Contact"])
   CFG.debounce_ms          = asInt(Properties["Door Contact Debounce (ms)"], 250)
+  CFG.long_press_ms        = asInt(Properties["Long Press Threshold (ms)"], 1000)
+  CFG.double_click_ms      = asInt(Properties["Double Click Window (ms)"], 400)
   CFG.led_color_off        = Properties["Off LED Color"]  or "0,0,200"
   CFG.led_color_hold       = Properties["Hold LED Color"] or "200,200,0"
   CFG.led_color_auto       = Properties["Auto LED Color"] or "0,200,0"
@@ -286,6 +298,88 @@ local function CancelOpen()
 end
 
 -- ============================================================================
+-- Gesture decoder
+-- ============================================================================
+-- Drives single-press / double-press / long-press detection so callers can wire
+-- a physical button's Pressed event to "On Button Pressed" and Released event
+-- to "On Button Released" without writing any state-machine programming.
+--
+-- Outcomes:
+--   * Short press, no second press within Double Click Window:
+--       - If MODE == Off: Open Door (default duration)
+--       - Else:           Set Mode to Off
+--   * Two short presses within Double Click Window: Set Mode to Auto
+--   * Held past Long Press Threshold: Set Mode to Hold
+
+local function cancelGestureLongPressTimer()
+  if GESTURE.long_press_timer ~= nil then
+    GESTURE.long_press_timer = killTimer(GESTURE.long_press_timer)
+  end
+end
+
+local function cancelGestureDoubleClickTimer()
+  if GESTURE.double_click_timer ~= nil then
+    GESTURE.double_click_timer = killTimer(GESTURE.double_click_timer)
+  end
+end
+
+local function OnButtonPressed()
+  dbg("gesture: PRESSED")
+  cancelGestureLongPressTimer()
+  GESTURE.long_press_fired = false
+  GESTURE.long_press_timer = C4:AddTimer(CFG.long_press_ms, "MILLISECONDS", false)
+end
+
+local function OnButtonReleased()
+  dbg("gesture: RELEASED  (long_press_fired=", tostring(GESTURE.long_press_fired),
+      "waiting_for_double=", tostring(GESTURE.waiting_for_double), ")")
+
+  cancelGestureLongPressTimer()
+
+  if GESTURE.long_press_fired then
+    -- Long press already handled by its own timer; ignore release.
+    GESTURE.long_press_fired = false
+    return
+  end
+
+  if GESTURE.waiting_for_double then
+    -- Second short release within window => double press.
+    cancelGestureDoubleClickTimer()
+    GESTURE.waiting_for_double = false
+    dbg("gesture -> DOUBLE PRESS -> Auto")
+    SetMode("Auto", true)
+    return
+  end
+
+  -- First short release; arm double-click window.
+  GESTURE.waiting_for_double = true
+  GESTURE.double_click_timer = C4:AddTimer(CFG.double_click_ms, "MILLISECONDS", false)
+end
+
+local function handleGestureLongPressExpired()
+  -- Button is still being held past the long-press threshold.
+  GESTURE.long_press_timer = nil
+  GESTURE.long_press_fired = true
+  cancelGestureDoubleClickTimer()
+  GESTURE.waiting_for_double = false
+  dbg("gesture -> LONG PRESS -> Hold")
+  SetMode("Hold", true)
+end
+
+local function handleGestureDoubleClickExpired()
+  -- No second press within window: confirmed single press.
+  GESTURE.double_click_timer = nil
+  GESTURE.waiting_for_double = false
+  if STATE.mode == "Off" then
+    dbg("gesture -> SINGLE PRESS (from Off) -> Open Door")
+    OpenForN(CFG.default_open_seconds)
+  else
+    dbg("gesture -> SINGLE PRESS (from " .. STATE.mode .. ") -> Off")
+    SetMode("Off", true)
+  end
+end
+
+-- ============================================================================
 -- Sensor handling (with debounce)
 -- ============================================================================
 
@@ -373,6 +467,9 @@ function EX_CMDS.SET_MODE_HOLD(tParams) SetMode("Hold", true) end
 function EX_CMDS.SET_MODE_AUTO(tParams) SetMode("Auto", true) end
 
 function EX_CMDS.CANCEL_OPEN(tParams) CancelOpen() end
+
+function EX_CMDS.BUTTON_PRESSED(tParams)  OnButtonPressed()  end
+function EX_CMDS.BUTTON_RELEASED(tParams) OnButtonReleased() end
 
 function EX_CMDS.LUA_ACTION(tParams)
   -- Some Composer flows invoke actions via LUA_ACTION with the command in tParams
@@ -490,6 +587,16 @@ function OnTimerExpired(idTimer)
     end
     return
   end
+
+  if GESTURE.long_press_timer ~= nil and idTimer == GESTURE.long_press_timer then
+    handleGestureLongPressExpired()
+    return
+  end
+
+  if GESTURE.double_click_timer ~= nil and idTimer == GESTURE.double_click_timer then
+    handleGestureDoubleClickExpired()
+    return
+  end
 end
 
 function OnPropertyChanged(strProperty)
@@ -558,6 +665,8 @@ function OnDriverDestroyed()
   cancelHoldTimer()
   cancelStillOpenTimer()
   cancelDebounceTimer()
+  cancelGestureLongPressTimer()
+  cancelGestureDoubleClickTimer()
   -- Release relays defensively
   if STATE.open_relay_bound then
     sendRelay(OPEN_RELAY_ID, true, CFG.invert_open_relay, "OPEN")

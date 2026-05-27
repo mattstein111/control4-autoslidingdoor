@@ -63,7 +63,29 @@
   <tr><td>Set Mode to Hold (Hold Open)</td><td>Open Door relay held closed. If Hold Duration &gt; 0, auto-releases to Off after that long.</td></tr>
   <tr><td>Set Mode to Auto (Motion Sensors)</td><td>Arm Motion relay held closed. Open Door relay released.</td></tr>
   <tr><td>Cancel Pending Open</td><td>Stops any in-flight "Open Door" timer early. Mode unchanged.</td></tr>
+  <tr><td>On Button Pressed</td><td>Notify the driver a bound physical button has been pressed. Feeds the built-in gesture decoder (see below). Pair with <em>On Button Released</em>.</td></tr>
+  <tr><td>On Button Released</td><td>Notify the driver a bound physical button has been released. Feeds the built-in gesture decoder.</td></tr>
 </table>
+
+<h2>Built-in gesture decoder</h2>
+
+<p>The driver includes a state machine that decodes single / double / long-press gestures from a physical button. Wire your keypad/button programming this way:</p>
+
+<ul>
+  <li><strong>When Button is Pressed</strong> &rarr; call <code>Auto Sliding Door &rarr; On Button Pressed</code></li>
+  <li><strong>When Button is Released</strong> &rarr; call <code>Auto Sliding Door &rarr; On Button Released</code></li>
+</ul>
+
+<p>That's it &mdash; no custom timers, no helper variables. The driver maps gestures to actions:</p>
+
+<table>
+  <tr><th>Gesture</th><th>Result</th></tr>
+  <tr><td>Single press (no second press within Double Click Window)</td><td>If Mode = Off &rarr; Open Door. Else &rarr; Set Mode to Off (releases Hold or Auto).</td></tr>
+  <tr><td>Double press (two short presses within Double Click Window)</td><td>Set Mode to Auto.</td></tr>
+  <tr><td>Long press (held past Long Press Threshold)</td><td>Set Mode to Hold. Fires the moment the threshold is crossed, before release.</td></tr>
+</table>
+
+<p>Timing is tuned via the <strong>Long Press Threshold (ms)</strong> and <strong>Double Click Window (ms)</strong> properties.</p>
 
 <h2>Events</h2>
 
