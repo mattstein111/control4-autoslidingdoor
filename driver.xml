@@ -5,8 +5,8 @@
   <model>Motion + Hold Experience Button</model>
   <creator>Matt Stein</creator>
   <created>05/26/2026 12:00 PM</created>
-  <modified>10/15/2026 08:00 PM</modified>
-  <version>7</version>
+  <modified>10/15/2026 09:00 PM</modified>
+  <version>8</version>
   <control>lua_gen</control>
   <driver>DriverWorks</driver>
   <auto_update>false</auto_update>
@@ -190,6 +190,39 @@
         <readonly>false</readonly>
         <tooltip>Color of bound keypad button LEDs when current mode is Auto.</tooltip>
       </property>
+      <property>
+        <name>Auto Update</name>
+        <type>LIST</type>
+        <items>
+          <item>Off</item>
+          <item>Beta</item>
+          <item>Release</item>
+        </items>
+        <default>Off</default>
+        <readonly>false</readonly>
+        <tooltip>Install new versions from GitHub Releases automatically (checked at startup and every 24 hours). Off = never install automatically. Beta = also prereleases. Release = stable releases only. Never downgrades. Requires internet access from the controller. (default Off)</tooltip>
+      </property>
+      <property>
+        <name>Latest Available Version</name>
+        <default/>
+        <type>STRING</type>
+        <readonly>true</readonly>
+        <tooltip>Newest release found on the selected channel at the last check.</tooltip>
+      </property>
+      <property>
+        <name>Update Download URL</name>
+        <default/>
+        <type>STRING</type>
+        <readonly>true</readonly>
+        <tooltip>Release page of a newer version, when one is available.</tooltip>
+      </property>
+      <property>
+        <name>Last Update Check</name>
+        <default/>
+        <type>STRING</type>
+        <readonly>true</readonly>
+        <tooltip>When the driver last checked GitHub for updates, and what happened.</tooltip>
+      </property>
     </properties>
     <commands>
       <command>
@@ -266,6 +299,14 @@
       <action>
         <name>On Button Released</name>
         <command>BUTTON_RELEASED</command>
+      </action>
+      <action>
+        <name>Check for Updates Now</name>
+        <command>CHECK_UPDATES</command>
+      </action>
+      <action>
+        <name>Install Latest Release (Force)</name>
+        <command>INSTALL_UPDATE</command>
       </action>
     </actions>
   </config>

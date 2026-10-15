@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.2.0-beta.1 — 2026-10-15
+
+- **New [#5](https://github.com/mattstein111/control4-autoslidingdoor/issues/5): self-installing auto-update from GitHub Releases.** Install once through Composer; new releases then install themselves in place, keeping bindings, properties and programming. Ported from control4-frigate's updater (single-driver variant) with the frigate #33 improvements.
+  - `Auto Update` property: **Off** (default) / Release / Beta. Checks at startup, on change and every 24 hours.
+  - Actions: **Check for Updates Now** (report-only while Off) and **Install Latest Release (Force)**.
+  - Read-only status: `Latest Available Version`, `Update Download URL`, `Last Update Check` (time and outcome).
+  - Safety: complete-file check before writing (ZIP signature, end-of-archive record, size matches GitHub's), no reload if the write fails, 5-minute anti-loop guard on every automatic path, one install at a time, never downgrades (Force included), persistence and SOAP faults contained.
+  - Picks the channel's **highest** version, not GitHub's newest-by-date. Version comparison handles any number of parts (`0.9.1.9 > 0.9.1.8`), numeric prerelease segments (`beta.10 > beta.9`), `V`/case, and ignores `+build`.
+  - Release walker fixes a frigate bug where the release after a rejected one (draft / wrong channel) was skipped.
+- **New release pipeline** `.github/workflows/release.yml`: pushing `v*` checks the tag equals `DRIVER_VERSION`, runs the test suite, builds, and attaches `autoslidingdoor.c4z`. Any tag with a `-` becomes a prerelease.
+- `build.sh` / `tests/run_tests.sh` find `luac5.1` / `lua5.1` where plain `luac` / `lua` aren't installed (Ubuntu CI).
+- README: Auto Update section, the release checklist, an on-hardware smoke-test procedure, and a corrected Versioning section (`<version>` is +1 per release, not `git rev-list --count`). The release badge now tracks the latest release automatically.
+- Tests: new `tests/test_autoupdate.lua` (49 cases; 83 total). Every hardening rule is pinned by a test that fails when the rule is removed (mutation-checked).
+- Driver `<version>` 7 → 8.
+
 ## v2.1.1 — 2026-10-15
 
 - **Fix [#4](https://github.com/mattstein111/control4-autoslidingdoor/issues/4): device history now shows in the Control4 app.** The driver never called `C4:RegisterEvents`, and Navigator only renders history whose (category, subcategory, type) is registered. It also recorded with a five-argument `C4:RecordHistory` (a description string as the fifth argument), which isn't the proven form. Now:

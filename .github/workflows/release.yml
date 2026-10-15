@@ -1,0 +1,56 @@
+# Release pipeline (issue #5).
+#
+# Push a tag  vX.Y.Z  or  vX.Y.Z-beta.N / -rc.N / -alpha.N  and this:
+#   1. checks the tag matches DRIVER_VERSION in driver.lua (the installed
+#      driver compares against that string; a mismatch makes the updater
+#      reinstall the same release forever, rate-limited by the anti-loop guard),
+#   2. runs the offline test suite (LuaJIT + Lua 5.1) and the build lint,
+#   3. builds autoslidingdoor.c4z and attaches it to a GitHub release.
+#      Any tag with a hyphen (semver prerelease: -beta.N, -rc.N, -alpha.N, -pre…)
+#      is marked prerelease, which is the flag the driver's Beta/Release
+#      channel filter reads. A stable tag has no hyphen.
+#
+# The asset name must stay autoslidingdoor.c4z: the auto-updater looks it up
+# by that exact name and writes it over the installed driver of the same name.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxml2-utils lua5.1 luajit zip
+
+      - name: Tag must match DRIVER_VERSION
+        run: |
+          code_version=$(sed -n 's/^local DRIVER_VERSION *= *"\(.*\)".*/\1/p' driver.lua)
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag=$tag  DRIVER_VERSION=$code_version"
+          if [ "$tag" != "$code_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match DRIVER_VERSION \"$code_version\" in driver.lua"
+            exit 1
+          fi
+
+      - name: Test
+        run: ./tests/run_tests.sh
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: autoslidingdoor.c4z
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

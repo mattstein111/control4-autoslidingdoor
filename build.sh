@@ -9,9 +9,13 @@ OUT="${NAME}.c4z"
 
 cd "$(dirname "$0")"
 
+# Debian/Ubuntu's lua5.1 package may only install "luac5.1" (e.g. in CI).
+LUAC="$(command -v luac || command -v luac5.1 || true)"
+if [ -z "$LUAC" ]; then echo "luac not found (brew install lua / apt install lua5.1)" >&2; exit 1; fi
+
 echo "Pre-flight validation..."
 xmllint --noout driver.xml
-luac -p driver.lua
+"$LUAC" -p driver.lua
 echo "  driver.xml + driver.lua OK"
 
 echo "Cleaning previous artifact..."

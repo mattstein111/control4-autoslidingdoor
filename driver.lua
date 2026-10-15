@@ -6,7 +6,27 @@
   See docs/superpowers/specs/ for the full design spec.
 --]]
 
-local DRIVER_VERSION = "2.1.1"
+local DRIVER_VERSION = "2.2.0-beta.1"
+
+-- Auto-update (issue #5). The GitHub release tag for this build is
+-- "v" .. DRIVER_VERSION; release CI refuses to publish a tag that doesn't
+-- match, because the installed driver compares the latest tag against this
+-- string. RELEASE CHECKLIST, all in one commit: DRIVER_VERSION here,
+-- <version> (+1) and <modified> in driver.xml, a CHANGELOG entry; then push
+-- tag v<DRIVER_VERSION>. Forgetting DRIVER_VERSION makes the driver believe
+-- it is out of date and reinstall the same release (rate-limited to once per
+-- 5 minutes by the anti-loop guard).
+local DRIVER_RELEASE         = "v" .. DRIVER_VERSION
+local UPDATE_REPO            = "mattstein111/control4-autoslidingdoor"
+-- Must equal both the release asset name (build.sh output) and the filename
+-- of the installed driver, because UpdateProjectC4i reloads by filename.
+local DRIVER_FILENAME        = "autoslidingdoor.c4z"
+local UPDATE_CHECK_SECONDS   = 24 * 60 * 60
+local INSTALL_GUARD_SECONDS  = 5 * 60
+local PERSIST_LAST_INSTALL   = "last_install_attempt"
+-- Shared-secret FileSetDir unlock for unsigned community drivers
+-- (c4-conventions §3a, credit finitelabs/control4-esphome).
+local FILESETDIR_HANDSHAKE   = "c29tZXNwZWNpYWxrZXk=++11"
 
 -- Connection IDs (must match driver.xml)
 local PROXY_ID            = 5001
@@ -70,6 +90,8 @@ local STATE = {
   still_open_timer = nil,            -- C4 timer handle for Still-Open watchdog
   debounce_timer   = nil,            -- C4 timer handle for sensor debounce
   pending_door     = nil,            -- door state awaiting debounce confirmation
+  update_timer     = nil,            -- C4 timer handle for the 24h update check
+  installing       = false,          -- an install is in flight (download/write/SOAP)
   sensor_bound     = false,
   open_relay_bound = false,
   arm_relay_bound  = false,
@@ -622,6 +644,351 @@ local function syncBindingState()
 end
 
 -- ============================================================================
+-- Auto-update from GitHub Releases (issue #5)
+-- ============================================================================
+-- Ported from control4-frigate's NVR updater (validated on OS 3.4.3, frigate
+-- #3/#21), single-driver variant, with frigate #33's improvements: N-part
+-- version compare, Last Update Check, forced install, pcall'd persistence.
+--
+--   Auto Update = Off      no polling. "Check for Updates Now" reports the
+--                          latest stable release but never installs.
+--   Auto Update = Beta     poll every 24h (and at boot, and on change);
+--   Auto Update = Release  install anything newer on the channel. Beta also
+--                          considers prereleases.
+--   "Install Latest Release (Force)" reinstalls the latest release on the
+--   channel (Release when Off) even if it is not newer, but never an OLDER
+--   one: a downgrade could land on a version without the updater (v2.0.1),
+--   stranding the device until someone visits Composer.
+--
+-- Install = download asset -> verify zip magic -> write C4Z_ROOT/<filename>
+-- -> persist attempt time -> local SOAP UpdateProjectC4i. Director then
+-- hot-reloads this driver in place; bindings, properties and programming
+-- survive. The SOAP reloads THIS Lua VM, so it must be the last thing done.
+
+local PROP_AUTO_UPDATE = "Auto Update"
+local PROP_LATEST      = "Latest Available Version"
+local PROP_UPDATE_URL  = "Update Download URL"
+local PROP_LAST_CHECK  = "Last Update Check"
+
+-- "v1.2.3.4-beta.10" -> { nums = {1,2,3,4}, pre = {"beta", 10} } (pre nil if
+-- none). Any number of numeric parts; prerelease split on dots, numeric
+-- segments as numbers so beta.10 > beta.9, text lower-cased (RC == rc).
+-- "+build" metadata is ignored, as in semver. Leading v/V optional.
+local function parseVersion(v)
+  if type(v) ~= "string" then return nil end
+  v = v:gsub("^[vV]", ""):gsub("%+.*$", "")
+  local core, pre = v:match("^([%d%.]+)%-?(.*)$")
+  if not core then return nil end
+  pre = pre:lower()
+  local nums = {}
+  for n in core:gmatch("%d+") do nums[#nums + 1] = tonumber(n) end
+  if #nums == 0 then return nil end
+  local preParts
+  if pre ~= "" then
+    preParts = {}
+    for seg in pre:gmatch("[^%.]+") do preParts[#preParts + 1] = tonumber(seg) or seg end
+  end
+  return { nums = nums, pre = preParts }
+end
+
+-- -1 / 0 / 1 for a < b / a == b / a > b. Shorter numeric cores are zero-padded
+-- (1.0 == 1.0.0). A release outranks a prerelease of the same core. Unparseable
+-- input compares equal, so garbage never triggers an install.
+local function compareVersions(a, b)
+  local va, vb = parseVersion(a), parseVersion(b)
+  if not va or not vb then return 0 end
+  for i = 1, math.max(#va.nums, #vb.nums) do
+    local x, y = va.nums[i] or 0, vb.nums[i] or 0
+    if x ~= y then return (x < y) and -1 or 1 end
+  end
+  if not va.pre and not vb.pre then return 0 end
+  if not va.pre then return 1 end
+  if not vb.pre then return -1 end
+  for i = 1, math.max(#va.pre, #vb.pre) do
+    local x, y = va.pre[i], vb.pre[i]
+    if x == nil then return -1 end          -- fewer segments = lower (semver)
+    if y == nil then return 1 end
+    if x ~= y then
+      local tx, ty = type(x), type(y)
+      if tx == ty then return (x < y) and -1 or 1 end
+      return (tx == "number") and -1 or 1   -- numeric < alphanumeric (semver)
+    end
+  end
+  return 0
+end
+
+-- Walk the GitHub /releases JSON and return the HIGHEST-versioned release on
+-- the channel: { tag=, prerelease=, html_url=, assets = { [name] = {url=,
+-- size=} } }. Highest, not first: GitHub orders by date, so a stable hotfix
+-- published after a beta would otherwise hide the beta from the Beta channel.
+-- Pattern-based, no JSON library (frigate's walker). draft and prerelease
+-- follow tag_name in GitHub's field order, so a window from one tag_name to
+-- the next holds this release's flags and assets. The window ends at the
+-- START of the next tag_name: frigate ends it at the END of the match and
+-- consequently skips the release after any rejected one (reported upstream).
+local function selectRelease(body, channel)
+  local includePrerelease = (channel == "Beta")
+  local best
+  local pos = 1
+  while true do
+    local _, tagEnd, tag = body:find('"tag_name"%s*:%s*"([^"]+)"', pos)
+    if not tag then return best end
+    local nextTag = body:find('"tag_name"%s*:', tagEnd) or (#body + 1)
+    local window = body:sub(tagEnd, nextTag)
+    local draft = window:match('"draft"%s*:%s*(%w+)') == "true"
+    local prerelease = window:match('"prerelease"%s*:%s*(%w+)') == "true"
+    if not draft and (includePrerelease or not prerelease) then
+      local assets = {}
+      local assetsStart = window:find('"assets"%s*:%s*%[')
+      if assetsStart then
+        for chunk in window:sub(assetsStart):gmatch("%b{}") do
+          local n = chunk:match('"name"%s*:%s*"([^"]+)"')
+          local u = chunk:match('"browser_download_url"%s*:%s*"([^"]+)"')
+          local sz = tonumber(chunk:match('"size"%s*:%s*(%d+)'))
+          if n and u then assets[n] = { url = u, size = sz } end
+        end
+      end
+      local candidate = {
+        tag = tag,
+        prerelease = prerelease,
+        -- Built from repo + tag: the release's own html_url precedes tag_name
+        -- in the JSON, so the forward window can't see it (frigate lesson).
+        html_url = "https://github.com/" .. UPDATE_REPO .. "/releases/tag/" .. tag,
+        assets = assets,
+      }
+      if not best or compareVersions(candidate.tag, best.tag) > 0 then best = candidate end
+    end
+    pos = nextTag
+  end
+end
+
+local function setLastCheck(outcome)
+  C4:UpdateProperty(PROP_LAST_CHECK, os.date("%Y-%m-%d %H:%M") .. " — " .. outcome)
+end
+
+-- Anti-loop guard. pcall'd: a Persist fault must not abort OnDriverLateInit
+-- (the same one-throw-kills-the-handler trap as SetVariable).
+local function recentInstallAttempt()
+  local ok, val = pcall(function() return C4:PersistGetValue(PERSIST_LAST_INSTALL) end)
+  local ts = ok and tonumber(val) or nil
+  return ts ~= nil and (os.time() - ts) < INSTALL_GUARD_SECONDS
+end
+
+local function recordInstallAttempt()
+  pcall(function() C4:PersistSetValue(PERSIST_LAST_INSTALL, tostring(os.time())) end)
+end
+
+-- Ask Director (localhost:5020) to hot-reload DRIVER_FILENAME from C4Z_ROOT.
+-- The envelope must be null-terminated (c4-conventions §3).
+local function sendInstallSoap()
+  local soap = '<c4soap name="UpdateProjectC4i" session="0" operation="RWX" category="composer" async="0">'
+    .. '<param name="name" type="string">' .. DRIVER_FILENAME .. '</param></c4soap>\0'
+  local client = C4:CreateTCPClient()
+  client:OnConnect(function(cli)
+    cli:Write(soap)
+    cli:Close()
+    print("[autoslidingdoor] Install SOAP sent for " .. DRIVER_FILENAME)
+  end)
+  client:OnError(function(cli, code, msg)
+    STATE.installing = false
+    print("[autoslidingdoor] Install SOAP error " .. tostring(code) .. ": " .. tostring(msg))
+    pcall(function() cli:Close() end)
+  end)
+  client:Connect("127.0.0.1", 5020)
+end
+
+-- Write the downloaded .c4z over the installed one. Needs the FileSetDir
+-- handshake from OnDriverLateInit; without it this writes into a sandbox
+-- Director never reads and the install silently does nothing.
+local function writeC4zToRoot(body)
+  local ok, err = pcall(function() C4:FileSetDir("C4Z_ROOT") end)
+  if not ok then
+    print("[autoslidingdoor] FileSetDir(C4Z_ROOT) failed: " .. tostring(err))
+    return false
+  end
+  if C4:FileExists(DRIVER_FILENAME) then
+    pcall(function() C4:FileDelete(DRIVER_FILENAME) end)
+  end
+  local okOpen, fileId = pcall(function() return C4:FileOpen(DRIVER_FILENAME) end)
+  if not (okOpen and type(fileId) == "number" and fileId ~= -1) then
+    print("[autoslidingdoor] FileOpen(" .. DRIVER_FILENAME .. ") failed: " .. tostring(fileId))
+    return false
+  end
+  pcall(function() C4:FileSetPos(fileId, 0) end)
+  -- (handle, LENGTH, data): length comes before data (c4-conventions §3a).
+  local okWrite, errWrite = pcall(function() C4:FileWrite(fileId, #body, body) end)
+  pcall(function() C4:FileClose(fileId) end)
+  if not okWrite then
+    print("[autoslidingdoor] FileWrite failed: " .. tostring(errWrite))
+    return false
+  end
+  return true
+end
+
+-- A complete .c4z (zip) starts with a local-file header and ends with an
+-- end-of-central-directory record within its last 64 KiB + 22 bytes.
+-- The size check against the API's asset size catches truncation outright.
+local function looksLikeCompleteZip(data, expectedSize)
+  local n = data and #data or 0
+  if n < 22 or data:sub(1, 4) ~= "PK\3\4" then return false, "not a zip" end
+  if expectedSize and n ~= expectedSize then
+    return false, "size " .. n .. " != expected " .. expectedSize
+  end
+  if not data:find("PK\5\6", math.max(1, n - 65557), true) then
+    return false, "no end-of-archive record (truncated?)"
+  end
+  return true
+end
+
+local function downloadAndInstall(rel)
+  if STATE.installing then
+    print("[autoslidingdoor] Install already in progress; ignoring " .. rel.tag)
+    return
+  end
+  local asset = rel.assets[DRIVER_FILENAME]
+  local url = asset and asset.url
+  if not url then
+    print("[autoslidingdoor] Release " .. rel.tag .. " is missing asset " .. DRIVER_FILENAME
+          .. "; not installing")
+    setLastCheck(rel.tag .. " missing asset " .. DRIVER_FILENAME)
+    return
+  end
+  STATE.installing = true
+  print("[autoslidingdoor] Downloading " .. rel.tag .. " from " .. url)
+  local headers = {
+    ["User-Agent"] = "control4-autoslidingdoor/" .. DRIVER_RELEASE,
+    ["Accept"]     = "application/octet-stream",
+  }
+  C4:urlGet(url, headers, false, function(_ticket, data, code, _hdrs, err)
+    if err and err ~= "" then
+      STATE.installing = false
+      print("[autoslidingdoor] Download failed: " .. tostring(err))
+      setLastCheck("download of " .. rel.tag .. " failed: " .. tostring(err))
+      return
+    end
+    -- GitHub redirects (302) to its CDN; urlGet follows the redirect but
+    -- reports the first status. Accept 2xx/3xx, then insist on a complete zip
+    -- so an HTML error page or a truncated body can never overwrite the driver.
+    local httpOk = type(code) == "number" and code >= 200 and code < 400
+    local n = data and #data or 0
+    local zipOk, why = looksLikeCompleteZip(data, asset.size)
+    if not (httpOk and zipOk) then
+      STATE.installing = false
+      print(string.format("[autoslidingdoor] Download rejected: status=%s bytes=%d (%s)",
+                          tostring(code), n, tostring(why or "ok")))
+      setLastCheck("download of " .. rel.tag .. " rejected (HTTP " .. tostring(code)
+                   .. (why and (", " .. why) or "") .. ")")
+      return
+    end
+    print(string.format("[autoslidingdoor] Downloaded %d bytes (http %s)", n, tostring(code)))
+    if not writeC4zToRoot(data) then
+      STATE.installing = false
+      setLastCheck("could not write " .. rel.tag .. " to C4Z_ROOT")
+      return
+    end
+    setLastCheck("installing " .. rel.tag)
+    recordInstallAttempt()
+    -- STATE.installing stays true: the reload replaces this Lua VM. If the
+    -- SOAP fails, sendInstallSoap's error handler clears it.
+    sendInstallSoap()          -- last: reloads this Lua VM
+  end)
+end
+
+-- Poll GitHub Releases, publish what was found, and install when allowed.
+--   channel: "Beta" | "Release" (callers resolve Off before calling)
+--   mode:    "auto"    boot / timer / property change: install if newer,
+--                      unless an install was attempted in the last 5 min
+--            "manual"  Check for Updates Now with a channel set: install if
+--                      newer, bypassing the anti-loop guard (explicit retry)
+--            "report"  never install (Check for Updates Now while Off)
+--            "force"   reinstall the channel's latest even if equal; never
+--                      an older version
+local function checkForUpdates(channel, mode)
+  local headers = {
+    ["User-Agent"] = "control4-autoslidingdoor/" .. DRIVER_RELEASE,
+    ["Accept"]     = "application/vnd.github+json",
+  }
+  dbg("update check: channel=", channel, "mode=", mode, "installed=", DRIVER_RELEASE)
+  C4:urlGet("https://api.github.com/repos/" .. UPDATE_REPO .. "/releases?per_page=100", headers, false,
+    function(_ticket, data, code, _hdrs, err)
+      if err and err ~= "" then
+        print("[autoslidingdoor] Update check failed: " .. tostring(err))
+        setLastCheck("check failed: " .. tostring(err))
+        return
+      end
+      if code ~= 200 or not data or data == "" then
+        print("[autoslidingdoor] Update check HTTP " .. tostring(code))
+        setLastCheck("check failed: HTTP " .. tostring(code))
+        return
+      end
+      local rel = selectRelease(data, channel)
+      if not rel then
+        C4:UpdateProperty(PROP_LATEST, "(none)")
+        C4:UpdateProperty(PROP_UPDATE_URL, "")
+        setLastCheck("no " .. channel .. " release found")
+        return
+      end
+      C4:UpdateProperty(PROP_LATEST, rel.tag)
+      local cmp = compareVersions(DRIVER_RELEASE, rel.tag)
+      local newer = cmp < 0
+      if newer then
+        C4:UpdateProperty(PROP_UPDATE_URL, rel.html_url)
+      else
+        C4:UpdateProperty(PROP_UPDATE_URL, "")
+      end
+
+      if mode == "force" then
+        if cmp > 0 then
+          print("[autoslidingdoor] Not forcing " .. rel.tag .. ": older than installed "
+                .. DRIVER_RELEASE .. ". Downgrade through Composer if you really mean it.")
+          setLastCheck("force refused: " .. rel.tag .. " is older than " .. DRIVER_RELEASE)
+          return
+        end
+        print("[autoslidingdoor] Forced install of " .. rel.tag .. " (installed " .. DRIVER_RELEASE .. ")")
+        downloadAndInstall(rel)
+      elseif newer and mode == "auto" and recentInstallAttempt() then
+        -- Anti-loop on every automatic path, not just boot: if Director fires
+        -- the timer or OnPropertyChanged around an install that left the old
+        -- version running, this stops a reinstall loop.
+        print("[autoslidingdoor] Update " .. rel.tag .. " available but an install was attempted in the last "
+              .. INSTALL_GUARD_SECONDS / 60 .. " min; not retrying automatically.")
+        setLastCheck("update available: " .. rel.tag .. " (recent install attempt; use Check for Updates Now)")
+      elseif newer and (mode == "auto" or mode == "manual") then
+        print("[autoslidingdoor] Update available: " .. rel.tag .. " (installed "
+              .. DRIVER_RELEASE .. "); installing")
+        downloadAndInstall(rel)
+      elseif newer then
+        print("[autoslidingdoor] Update available: " .. rel.tag .. " (installed "
+              .. DRIVER_RELEASE .. "). Auto Update is Off; not installing.")
+        setLastCheck("update available: " .. rel.tag)
+      else
+        dbg("up to date:", DRIVER_RELEASE, "latest", channel, rel.tag)
+        setLastCheck("up to date (" .. DRIVER_RELEASE .. ", latest " .. rel.tag .. ")")
+      end
+    end)
+end
+
+local function configuredChannel()
+  local c = Properties[PROP_AUTO_UPDATE]
+  if c == "Beta" or c == "Release" then return c end
+  return "Off"
+end
+
+-- (Re)start the 24h repeating check timer. No timer while Off.
+local function startUpdateTimer()
+  if STATE.update_timer ~= nil then STATE.update_timer = killTimer(STATE.update_timer) end
+  if configuredChannel() ~= "Off" then
+    STATE.update_timer = C4:AddTimer(UPDATE_CHECK_SECONDS, "SECONDS", true)
+  end
+end
+
+-- Timer / boot / property-change entry point.
+local function autoCheck()
+  local channel = configuredChannel()
+  if channel ~= "Off" then checkForUpdates(channel, "auto") end
+end
+
+-- ============================================================================
 -- Action dispatch (Composer/voice/programming → driver)
 -- ============================================================================
 
@@ -645,10 +1012,28 @@ function EX_CMDS.CANCEL_OPEN(tParams) CancelOpen() end
 function EX_CMDS.BUTTON_PRESSED(tParams)  OnButtonPressed()  end
 function EX_CMDS.BUTTON_RELEASED(tParams) OnButtonReleased() end
 
+-- Composer Actions tab (driver.xml <actions>). Off resolves to the Release
+-- channel so a user can see what's available without enabling polling.
+function EX_CMDS.CHECK_UPDATES(tParams)
+  local channel = configuredChannel()
+  if channel == "Off" then
+    checkForUpdates("Release", "report")
+  else
+    checkForUpdates(channel, "manual")
+  end
+end
+
+function EX_CMDS.INSTALL_UPDATE(tParams)
+  local channel = configuredChannel()
+  if channel == "Off" then channel = "Release" end
+  checkForUpdates(channel, "force")
+end
+
 function EX_CMDS.LUA_ACTION(tParams)
   -- Some Composer flows invoke actions via LUA_ACTION with the command in tParams
-  if not tParams or not tParams.ACTION then return end
-  local handler = EX_CMDS[tParams.ACTION]
+  local action = tParams and (tParams.ACTION or tParams.action)
+  if not action then return end
+  local handler = EX_CMDS[action]
   if handler then handler(tParams) end
 end
 
@@ -757,6 +1142,12 @@ function OnTimerExpired(idTimer)
     handleGestureDoubleClickExpired()
     return
   end
+
+  if STATE.update_timer ~= nil and idTimer == STATE.update_timer then
+    -- Repeating timer: leave the handle in place.
+    autoCheck()
+    return
+  end
 end
 
 function OnPropertyChanged(strProperty)
@@ -783,6 +1174,9 @@ function OnPropertyChanged(strProperty)
       or strProperty == "Hold LED Color"
       or strProperty == "Auto LED Color" then
     updateKeypadLeds()
+  elseif strProperty == PROP_AUTO_UPDATE then
+    startUpdateTimer()
+    autoCheck()
   end
 end
 
@@ -799,8 +1193,9 @@ end
 function OnDriverLateInit()
   refreshConfig()
 
-  -- Unlock FileSetDir for any future self-update capability (per c4-conventions §3a)
-  local ok, err = pcall(function() C4:FileSetDir("c29tZXNwZWNpYWxrZXk=++11") end)
+  -- Unlock FileSetDir for the auto-updater (c4-conventions §3a). Must precede
+  -- any C4Z_ROOT file operation.
+  local ok, err = pcall(function() C4:FileSetDir(FILESETDIR_HANDSHAKE) end)
   if not ok then dbg("FileSetDir handshake error:", err) end
 
   -- Issue #4: declare history types before anything can record one.
@@ -819,6 +1214,20 @@ function OnDriverLateInit()
   -- (issue #1). Without this, all *_bound flags stay false and the driver
   -- silently drops every relay command and sensor query.
   syncBindingState()
+
+  -- Issue #5: start the 24h update timer and check now, unless an install
+  -- was attempted in the last 5 minutes. That case is usually this very
+  -- boot (the updater's SOAP reload); a failed install that left the old
+  -- version running would otherwise reinstall on every restart.
+  startUpdateTimer()
+  if configuredChannel() ~= "Off" then
+    if recentInstallAttempt() then
+      print("[autoslidingdoor] Skipping initial update check: install attempted in the last "
+            .. INSTALL_GUARD_SECONDS / 60 .. " min. Use Check for Updates Now to retry.")
+    else
+      autoCheck()
+    end
+  end
 end
 
 function OnDriverDestroyed()
@@ -829,6 +1238,7 @@ function OnDriverDestroyed()
   cancelDebounceTimer()
   cancelGestureLongPressTimer()
   cancelGestureDoubleClickTimer()
+  if STATE.update_timer ~= nil then STATE.update_timer = killTimer(STATE.update_timer) end
   -- Release relays defensively
   if STATE.open_relay_bound then
     sendRelay(OPEN_RELAY_ID, true, CFG.invert_open_relay, "OPEN")

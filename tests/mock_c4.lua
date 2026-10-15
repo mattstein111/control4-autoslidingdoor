@@ -238,7 +238,93 @@ function M.new(opts)
     return bindings[bindingId] or 0
   end
 
-  function C4impl:FileSetDir(_dir) return true end
+  -- -------------------------------------------------------------------------
+  -- Auto-update surface (issue #5). Models what control4-frigate validated on
+  -- OS 3.4.3: FileSetDir is locked until the esphome handshake, urlGet calls
+  -- back (ticketId, body, status, headers, err), TCP client is callback-based.
+  -- -------------------------------------------------------------------------
+
+  local HANDSHAKE = "c29tZXNwZWNpYWxrZXk=++11"
+  local fsUnlocked, fsDir = false, nil
+  local files = {}          -- "DIR/name" -> contents
+  local openFiles = {}      -- handle -> { path=, data= }
+  local nextFile = 0
+  local persist = {}
+
+  function C4impl:FileSetDir(dir)
+    if dir == HANDSHAKE then fsUnlocked = true return true end
+    if not fsUnlocked then error("Restricted path specified", 2) end
+    fsDir = dir
+    return true
+  end
+  local function fpath(name) return tostring(fsDir) .. "/" .. tostring(name) end
+  function C4impl:FileExists(name) return files[fpath(name)] ~= nil end
+  function C4impl:FileDelete(name) files[fpath(name)] = nil return true end
+  -- FileOpen does NOT truncate an existing file (that's why the updater
+  -- deletes first): writing a shorter body over a longer file would leave the
+  -- old tail behind. opts.fileOpenFails makes FileOpen return -1.
+  function C4impl:FileOpen(name)
+    if opts.fileOpenFails then return -1 end
+    nextFile = nextFile + 1
+    openFiles[nextFile] = { path = fpath(name), data = files[fpath(name)] or "", pos = 0 }
+    return nextFile
+  end
+  function C4impl:FileSetPos(h, pos)
+    if openFiles[h] then openFiles[h].pos = pos end
+    return true
+  end
+  -- Signature is (handle, length, data): length BEFORE data (c4-conventions §3a).
+  function C4impl:FileWrite(h, len, data)
+    local f = openFiles[h]
+    if not f then error("bad file handle", 2) end
+    if type(len) ~= "number" or type(data) ~= "string" then
+      error("FileWrite(handle, length, data): wrong argument order/types", 2)
+    end
+    local chunk = data:sub(1, len)
+    f.data = f.data:sub(1, f.pos) .. chunk .. f.data:sub(f.pos + #chunk + 1)
+    f.pos = f.pos + #chunk
+    return len
+  end
+  function C4impl:FileClose(h)
+    local f = openFiles[h]
+    if f then files[f.path] = f.data; openFiles[h] = nil end
+  end
+
+  function C4impl:PersistGetValue(k) return persist[k] end
+  function C4impl:PersistSetValue(k, v) persist[k] = v end
+
+  -- urlGet requests queue up; the test answers them with h.respond().
+  local requests = {}
+  function C4impl:urlGet(url, headers, _cache, cb)
+    requests[#requests + 1] = { url = url, headers = headers, cb = cb }
+    return #requests
+  end
+
+  -- TCP client: records connect target and written bytes. Connect() succeeds
+  -- synchronously unless opts.tcpFails.
+  local tcp = {}
+  function C4impl:CreateTCPClient()
+    local c = { written = {}, closed = false }
+    tcp[#tcp + 1] = c
+    local obj = {}
+    function obj:OnConnect(fn) c.onConnect = fn return obj end
+    function obj:OnError(fn) c.onError = fn return obj end
+    function obj:OnResolve(fn) return obj end
+    function obj:OnDisconnect(fn) return obj end
+    function obj:OnRead(fn) return obj end
+    function obj:Write(data) c.written[#c.written + 1] = data return obj end
+    function obj:Close() c.closed = true return obj end
+    function obj:Connect(host, port)
+      c.host, c.port = host, port
+      if opts.tcpFails then
+        if c.onError then c.onError(obj, 1, "connection refused") end
+      elseif c.onConnect then
+        c.onConnect(obj)
+      end
+      return obj
+    end
+    return obj
+  end
 
   -- Strict proxy: record every call; unknown methods raise.
   local C4 = setmetatable({}, {
@@ -282,17 +368,26 @@ function M.new(opts)
   local h = {
     env = env, log = log, variables = variables, timers = timers,
     registered = registered,
+    files = files, persist = persist, requests = requests, tcp = tcp,
     bindings = bindings, xml = xmlText, declaredEvents = declaredEvents,
   }
 
+  -- opts.driverVersion rewrites the `local DRIVER_VERSION = "..."` line before
+  -- loading, so tests can run the real driver as if any version were installed.
   function h.load()
-    local path = M.ROOT .. "/driver.lua"
+    local src = readFile(M.ROOT .. "/driver.lua")
+    if opts.driverVersion then
+      local n
+      src, n = src:gsub('\nlocal DRIVER_VERSION = "[^"]*"',
+                        '\nlocal DRIVER_VERSION = "' .. opts.driverVersion .. '"', 1)
+      assert(n == 1, "DRIVER_VERSION line not found in driver.lua")
+    end
     local chunk
     if setfenv then
-      chunk = assert(loadfile(path))
+      chunk = assert(loadstring(src, "=driver.lua"))
       setfenv(chunk, env)
     else
-      chunk = assert(loadfile(path, "t", env))
+      chunk = assert(load(src, "=driver.lua", "t", env))
     end
     chunk()
     return h
@@ -355,6 +450,26 @@ function M.new(opts)
       local p = log.proxy[i]
       if p.id == id and (cmd == nil or p.cmd == cmd) then return p end
     end
+  end
+
+  -- Answer the oldest pending urlGet whose URL contains `match`.
+  function h.respond(match, body, status, err)
+    for i, r in ipairs(requests) do
+      if not r.answered and r.url:find(match, 1, true) then
+        r.answered = true
+        r.cb(i, body, status or 200, {}, err)
+        return r
+      end
+    end
+    error("no pending urlGet matching " .. tostring(match))
+  end
+
+  function h.pending(match)
+    local n = 0
+    for _, r in ipairs(requests) do
+      if not r.answered and (match == nil or r.url:find(match, 1, true)) then n = n + 1 end
+    end
+    return n
   end
 
   function h.clearLogs()

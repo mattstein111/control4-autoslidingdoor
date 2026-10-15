@@ -111,6 +111,18 @@
 
 <p>Both variables are <strong>read-only</strong>. Use them in programming conditions or watch them from another driver; to change the mode, use the <em>Set Mode to &hellip;</em> actions. (Available since v2.1.0. Earlier versions documented them but never created them.)</p>
 
+<h2>Auto Update</h2>
+
+<p>The driver can install new versions of itself from GitHub Releases. Set <strong>Auto Update</strong>:</p>
+
+<ul>
+  <li><strong>Off</strong> (default) &mdash; never installs automatically. <em>Check for Updates Now</em> still reports the newest stable release.</li>
+  <li><strong>Beta</strong> &mdash; checks at startup and every 24 hours; installs newer releases, prereleases included.</li>
+  <li><strong>Release</strong> &mdash; as Beta, but stable releases only.</li>
+</ul>
+
+<p>Actions: <em>Check for Updates Now</em>, and <em>Install Latest Release (Force)</em>, which reinstalls the channel's latest even if it's already running (repair / retry) but never installs an older version. <strong>Last Update Check</strong> shows when the driver last checked and what happened. Updates keep bindings, properties and programming. The controller needs internet access to github.com, and the driver file must be named <code>autoslidingdoor.c4z</code>.</p>
+
 <h2>History</h2>
 
 <p>With the History agent installed, the device's History in the Control4 app shows (category <em>Locks &amp; Sensors</em>, subcategory <em>Sliding Door</em>):</p>

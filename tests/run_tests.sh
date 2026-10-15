@@ -12,11 +12,16 @@ cd "$(dirname "$0")/.."
 
 echo "== lint"
 xmllint --noout driver.xml
-luac -p driver.lua
+LUAC="$(command -v luac || command -v luac5.1 || true)"
+[ -n "$LUAC" ] || { echo "luac not found" >&2; exit 1; }
+"$LUAC" -p driver.lua
 echo "   driver.xml + driver.lua OK"
 
 ran=0
-for interp in luajit lua; do
+# lua5.1 covers Debian/Ubuntu (CI), where the plain "lua" name may be absent.
+interps="luajit lua"
+command -v lua >/dev/null 2>&1 || interps="luajit lua5.1"
+for interp in $interps; do
   if command -v "$interp" >/dev/null 2>&1; then
     echo "== $interp tests/run.lua"
     "$interp" tests/run.lua

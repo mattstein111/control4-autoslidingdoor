@@ -10,7 +10,8 @@ A Control4 DriverWorks driver that turns a motion-sensor-enabled sliding door �
   </tr>
 </table>
 
-[![Release](https://img.shields.io/badge/release-v2.0.1-blue)](https://github.com/mattstein111/control4-autoslidingdoor/releases/latest)
+[![Release](https://img.shields.io/github/v/release/mattstein111/control4-autoslidingdoor)](https://github.com/mattstein111/control4-autoslidingdoor/releases/latest)
+[![Prerelease](https://img.shields.io/github/v/release/mattstein111/control4-autoslidingdoor?include_prereleases&label=beta)](https://github.com/mattstein111/control4-autoslidingdoor/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Control4](https://img.shields.io/badge/Control4-OS%202.9%2B-orange)](https://www.control4.com/os3/)
 
@@ -23,6 +24,7 @@ A Control4 DriverWorks driver that turns a motion-sensor-enabled sliding door �
 - **In-app mode selection** via the C4 Custom Buttons agent
 - **Tunable everything** — open duration, Hold auto-release, gesture thresholds, contact debounce, per-mode keypad LED colors
 - **Relay & contact inversion** built in (works with NO and NC wiring)
+- **Self-updating** (opt-in) from GitHub Releases, with no Composer visit per release
 
 ## Table of contents
 
@@ -31,6 +33,7 @@ A Control4 DriverWorks driver that turns a motion-sensor-enabled sliding door �
 
 - [Why this driver](#why-this-driver)
 - [Install](#install)
+- [Auto Update](#auto-update)
 - [Configure](#configure)
 - [Programming recipes](#programming-recipes)
   - [Drive the door from any physical button](#drive-the-door-from-any-physical-button-in-the-house)
@@ -113,6 +116,70 @@ Build dependencies: `zip`, `xmllint`, `luac`. Re-rendering icons additionally ne
 - The sliding door must accept dry-contact closures on both control inputs and provide a dry-contact position sensor
 
 The driver is hardware-agnostic on relay and sensor implementation — wire it to whatever physical relays/sensors your controller exposes.
+
+---
+
+## Auto Update
+
+From v2.2.0-beta.1 the driver can update itself from this repo's [GitHub Releases](https://github.com/mattstein111/control4-autoslidingdoor/releases). You install it once through Composer; after that, new releases install themselves with no Composer visit, keeping bindings, properties and programming.
+
+### Channels (`Auto Update` property)
+
+| Setting | Behaviour |
+|---|---|
+| **Off** *(default)* | Never checks automatically, never installs automatically. **Check for Updates Now** still reports the newest stable release. |
+| **Beta** | Checks at startup, when the setting changes, and every 24 hours. Installs the **highest** newer release, prereleases (any tag with a `-`, e.g. `-beta.2`, `-rc.1`) included. |
+| **Release** | Same, but stable releases only. |
+
+### Actions (Composer → device → Actions tab)
+
+| Action | What it does |
+|---|---|
+| **Check for Updates Now** | Checks immediately. If `Auto Update` is Beta/Release and something newer exists, installs it, even within the 5-minute anti-loop window (this is the explicit retry). When Off it only reports, against the Release channel. |
+| **Install Latest Release (Force)** | Reinstalls the channel's latest release (Release when Off) **even if it's the version already running**, to repair a damaged install or retry a failed one. It **refuses an older version**: a downgrade could land on a release without the updater (e.g. v2.0.1) and strand the device until a Composer visit. Downgrade through Composer if you really need to. |
+
+### Status (read-only properties)
+
+| Property | Shows |
+|---|---|
+| `Driver Version` | The running version (e.g. `2.2.0-beta.1`) |
+| `Latest Available Version` | Newest tag found on the channel at the last check, or `(none)` |
+| `Update Download URL` | Release page of a newer version, when there is one |
+| `Last Update Check` | Time of the last check and its outcome: `up to date (…)`, `update available: …`, `installing …`, `check failed: HTTP 403`, … |
+
+### How it works
+
+```mermaid
+sequenceDiagram
+    participant D as Driver (on controller)
+    participant G as GitHub API / CDN
+    participant FS as C4Z_ROOT
+    participant Dir as Director :5020
+    D->>G: GET /repos/…/releases (User-Agent, Accept: github+json)
+    G-->>D: releases JSON (newest first)
+    Note over D: pick newest non-draft on channel,<br/>compare tag with "v" + DRIVER_VERSION
+    D->>G: GET …/download/<tag>/autoslidingdoor.c4z
+    G-->>D: 302 → CDN → .c4z bytes (must start PK\3\4)
+    D->>FS: write autoslidingdoor.c4z
+    Note over D: persist install-attempt time (anti-loop)
+    D->>Dir: SOAP UpdateProjectC4i(autoslidingdoor.c4z)\0
+    Dir-->>D: reload driver in place (new Lua VM)
+```
+
+### Safety rails
+
+- **Off by default.** Nothing is downloaded until you choose a channel.
+- **Complete-file check.** Before anything is written, the download must start with the ZIP signature, end with a ZIP end-of-archive record, and match the asset size GitHub reports. An HTML error page or a truncated transfer can never overwrite the driver. If the write fails, no reload is requested.
+- **Anti-loop guard.** For 5 minutes after an install attempt, every *automatic* path (boot, 24h timer, setting change) declines to install. Usually the restart *is* the install; if an install failed and left the old version running, it won't retry in a loop. **Check for Updates Now** and **Install Latest Release (Force)** bypass it on purpose.
+- **One install at a time.** A second trigger while a download is in flight is ignored.
+- **Never downgrades.** Automatic installs need a strictly newer tag; Force allows equal but never older. Ordering: `v2.2.0` > `v2.2.0-rc.1` > `v2.2.0-beta.10` > `v2.2.0-beta.9`; any number of parts (`0.9.1.9` > `0.9.1.8`); `v`/`V` and prerelease case don't matter; `+build` metadata is ignored.
+- **Highest, not latest.** The channel's highest version wins, so a stable hotfix published after a beta doesn't hide the beta from the Beta channel.
+
+### Requirements
+
+- Controller can reach `api.github.com` and `github.com` over HTTPS. GitHub allows 60 anonymous API calls per hour per IP, far above one check a day.
+- The installed driver file must be named **`autoslidingdoor.c4z`** (the name the release asset has). Director reloads by filename.
+- Unsigned community driver: the self-install relies on the `FileSetDir` handshake described in `c4-conventions.md` §3a (finitelabs/esphome), done once at startup.
 
 ---
 
@@ -360,6 +427,10 @@ Since v2.1.1 ([#4](https://github.com/mattstein111/control4-autoslidingdoor/issu
 | Off LED Color | Color | `0,0,200` (blue) | Color picker |
 | Hold LED Color | Color | `200,200,0` (amber) | Color picker |
 | Auto LED Color | Color | `0,200,0` (green) | Color picker |
+| Auto Update | List | Off | Off / Beta / Release — see [Auto Update](#auto-update) |
+| Latest Available Version (readonly) | String | — | — |
+| Update Download URL (readonly) | String | — | — |
+| Last Update Check (readonly) | String | — | — |
 
 </details>
 
@@ -423,6 +494,9 @@ Set the **Debug Mode** property to `On`. Verbose output prints to Composer's Lua
 |---|---|---|
 | Mode-changed event doesn't fire | Mode wasn't actually transitioning (re-set to same mode is a no-op) | Confirm starting mode; check the Mode property |
 | Door state stuck on `Unknown` | `Door Contact` connection isn't wired (or not detected) | Check the `Contact Status` property; rewire if needed |
+| Update never installs | `Auto Update` is Off, or the controller can't reach GitHub | Read `Last Update Check`; run **Check for Updates Now**. With Lua output open, an install logs `Downloading …` → `Downloaded N bytes (http 302)` → `Install SOAP sent` |
+| `Last Update Check` says `check failed: HTTP 403` | GitHub anonymous rate limit (60/h per public IP, shared by everything behind your router) | Wait an hour; the 24h check will retry |
+| `Skipping initial update check` in Lua output | An install was attempted < 5 minutes ago (anti-loop guard) | Normal right after an update. Otherwise use **Check for Updates Now** or **Install Latest Release (Force)** |
 | Nothing in the device's History in the app | History agent missing, or driver older than v2.1.1 ([#4](https://github.com/mattstein111/control4-autoslidingdoor/issues/4)) | Add the History agent; update the driver. Check Lua output for `RecordHistory did not store` or `RegisterEvents …` warnings (printed even with Debug Mode Off) |
 | `MODE` / `DOOR_STATE` missing from Composer Programming variables | Driver older than v2.1.0 (variables were never created, [#3](https://github.com/mattstein111/control4-autoslidingdoor/issues/3)) | Update to v2.1.0+; confirm the `Driver Version` property |
 | Driver looks dead after Composer install | Bindings not detected on reload | Already fixed in v2.0.1 ([#1](https://github.com/mattstein111/control4-autoslidingdoor/issues/1)); confirm `<version>` ≥ 5 |
@@ -441,6 +515,7 @@ control4-autoslidingdoor/
 ├── driver.xml                     # Composer-facing manifest
 ├── driver.lua                     # Runtime logic (Lua 5.1)
 ├── build.sh                       # Builds autoslidingdoor.c4z
+├── .github/workflows/release.yml  # Tag push → test → build → GitHub release
 ├── tests/                         # Offline mock-C4 test suite (see Testing)
 ├── README.md                      # This file
 ├── CHANGELOG.md
@@ -495,15 +570,39 @@ Every test automatically fails if the mock recorded a violation. Files:
 |---|---|
 | `tests/test_baseline.lua` | The pre-existing contract: relays, tile icon, keypad LEDs, events, gesture decoder, debounce, Hold auto-release, no stray globals |
 | `tests/test_variables.lua` | `MODE` / `DOOR_STATE` Director variables ([#3](https://github.com/mattstein111/control4-autoslidingdoor/issues/3)) |
+| `tests/test_autoupdate.lua` | Auto-update ([#5](https://github.com/mattstein111/control4-autoslidingdoor/issues/5)): version ordering (N-part, prerelease segments, case, build metadata), highest-version channel selection over realistic GitHub JSON, the full download → write → SOAP path with exact bytes, every rejection path (non-zip, truncated, wrong size, HTTP errors, write failure), anti-loop guard on every automatic path, in-flight lock, 24h timer, Off / manual / force semantics incl. no-downgrade |
 | `tests/test_history.lua` | History: four-argument `RecordHistory`, `RegisterEvents` registration, fault containment ([#4](https://github.com/mattstein111/control4-autoslidingdoor/issues/4)) |
 
 The mock is not Director: it can't prove Composer renders something, or that a binding really fires. The hardware checks in the [manual test plan](#manual-test-plan) still apply. What it does well is catch regressions and the silent-failure classes above before a `.c4z` reaches the controller.
 
-### Versioning
+### Versioning & releases
 
-`<version>` in `driver.xml` is a monotonic integer derived from `git rev-list --count HEAD` — Control4 convention dictates this over date-based versions (date-based overflows Composer's int). `<modified>` is set to build date.
+Two version numbers, bumped together:
 
-Auto-update from GitHub Releases (the `FileSetDir` unlock pattern documented in `c4-conventions.md` §3a) is scaffolded but not enabled in v2.0.1.
+| Where | Form | Purpose |
+|---|---|---|
+| `DRIVER_VERSION` in `driver.lua` | semver string, e.g. `2.2.0` or `2.2.0-beta.1` | Shown in `Driver Version`. The auto-updater compares `"v" .. DRIVER_VERSION` against release tags |
+| `<version>` in `driver.xml` | small integer, **+1 per release** | Composer uses it to decide whether to reload. Must stay small: date-style values overflow Composer's int |
+
+**Release checklist (one commit):**
+
+1. `DRIVER_VERSION` in `driver.lua`
+2. `<version>` (+1) and `<modified>` (today) in `driver.xml`
+3. `CHANGELOG.md` entry
+4. `./tests/run_tests.sh` passes
+5. Commit, push, then `git tag v<DRIVER_VERSION> && git push origin v<DRIVER_VERSION>`
+
+The [release workflow](.github/workflows/release.yml) then **refuses the tag if it doesn't equal `DRIVER_VERSION`** (a mismatch would make installed drivers think they're out of date forever), runs the test suite, builds, and attaches `autoslidingdoor.c4z` to a GitHub release. Any tag containing a `-` becomes a prerelease, which only the **Beta** channel installs.
+
+### Auto-update smoke test (on hardware)
+
+The offline suite proves everything up to "these exact bytes were written to `C4Z_ROOT` and this exact SOAP was sent". Only a controller can prove Director reloads the driver:
+
+1. Install release **N** (e.g. `v2.2.0-beta.1`) via Composer **from the release asset** (not a local build, so the filename and bytes match). Set `Auto Update` = **Beta**.
+2. Publish **N+1** (version-only bump, e.g. `v2.2.0-beta.2`) using the checklist above; wait for the workflow to attach the asset.
+3. Run **Check for Updates Now** (or toggle `Auto Update`). Lua output should show `Update available` → `Downloading` → `Downloaded … (http 302)` → `Install SOAP sent`, then a fresh init.
+4. Confirm `Driver Version` = N+1, `Last Update Check` and `Latest Available Version` sensible, and bindings / properties / programming intact (tap the tile, change mode, check relays).
+5. Afterwards, delete smoke-test-only GitHub releases (keep the tags).
 
 ### Manual test plan
 
@@ -515,7 +614,8 @@ The installable-acceptance checklist lives in the [design spec](docs/superpowers
 
 - Patterns for the `uibutton` proxy, `<navigator_display_option>` state-icon swapping, `BUTTON_LINK` keypad-drag targets, and `RecordHistory` integration are borrowed from Control4's stock `door_relay_control` driver (ships with Composer Pro, OS 2.9+).
 - The `OnDriverLateInit` + `C4:GetBoundProviderBinding` pattern for surviving driver reload is also from `door_relay_control` (module-load lines 1152–1153).
-- The unlock for `C4:FileSetDir` on unsigned community drivers (used as scaffolding for future auto-update) is the esphome handshake by Derek Miller / finitelabs — see [control4-esphome](https://github.com/finitelabs/control4-esphome).
+- The unlock for `C4:FileSetDir` on unsigned community drivers, which the auto-updater depends on, is the esphome handshake by Derek Miller / finitelabs — see [control4-esphome](https://github.com/finitelabs/control4-esphome).
+- The auto-updater is ported from [control4-frigate](https://github.com/mattstein111/control4-frigate) (first prototyped in [control4-mqttmirror](https://github.com/mattstein111/control4-mqttmirror)), including the improvements listed in frigate #33.
 - Build conventions (icon ladder, top-level `<small>`/`<large>` icon refs, hot-reload SOAP envelope, version integer scheme) live in [`Claude-Code-Setup`](https://github.com/mattstein111/Claude-Code-Setup) at `c4-conventions.md` — promoted from this project's lessons as portable C4 truth.
 
 ## License
