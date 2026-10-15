@@ -109,6 +109,8 @@
   <li><code>DOOR_STATE</code> &mdash; string: "Open" / "Closed" / "Unknown"</li>
 </ul>
 
+<p>Both variables are <strong>read-only</strong>. Use them in programming conditions or watch them from another driver; to change the mode, use the <em>Set Mode to &hellip;</em> actions. (Available since v2.1.0. Earlier versions documented them but never created them.)</p>
+
 <h2>Navigator tile</h2>
 
 <p>Tapping the Auto Sliding Door tile in Navigator always calls <em>Open Door</em>. The tile never changes mode &mdash; mode changes only happen via keypad, voice, or programming. The tile's icon swaps based on current mode (gray = Off, amber = Hold, green = Auto).</p>

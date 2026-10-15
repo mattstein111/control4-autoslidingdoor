@@ -6,7 +6,7 @@
   See docs/superpowers/specs/ for the full design spec.
 --]]
 
-local DRIVER_VERSION = "2.0.1"
+local DRIVER_VERSION = "2.1.0"
 
 -- Connection IDs (must match driver.xml)
 local PROXY_ID            = 5001
@@ -19,6 +19,16 @@ local BL_HOLD             = 502
 local BL_AUTO             = 503
 
 local BUTTON_LINK_IDS = { BL_OPEN, BL_OFF, BL_HOLD, BL_AUTO }
+
+-- Director variables (issue #3). Addressed by NAME, never by the return value
+-- of C4:AddVariable, which is a boolean rather than an ID (c4-conventions §2).
+-- Both are created read-only in OnDriverInit: the driver has no
+-- OnVariableChanged handler, so a programming write would desync the variable
+-- from STATE. Mode changes go through the Set Mode actions only.
+local VAR = {
+  MODE       = "MODE",        -- "Off" | "Hold" | "Auto"
+  DOOR_STATE = "DOOR_STATE",  -- "Open" | "Closed" | "Unknown"
+}
 
 -- State (runtime, not persisted)
 local STATE = {
@@ -212,20 +222,41 @@ end
 -- State publishing
 -- ============================================================================
 
+-- Create the driver's Director variables. Safe to call on every init: on a
+-- driver update in place the variables already exist and AddVariable is a
+-- harmless no-op. Must run before anything calls setVar().
+local function initVariables()
+  -- Append new variables at the END only. Director appears to assign variable
+  -- IDs in creation order and Composer programming refers to variables by ID,
+  -- so inserting or reordering here could re-point existing programming.
+  C4:AddVariable(VAR.MODE,       "Off",     "STRING", true, false)  -- return value ignored
+  C4:AddVariable(VAR.DOOR_STATE, "Unknown", "STRING", true, false)
+end
+
+-- Write a Director variable without letting a fault escape. A raised error
+-- here would abort the enclosing publish*() before the tile icon, keypad LEDs
+-- and events behind it run (c4-conventions §2, "blast radius").
+local function setVar(name, value)
+  local ok, err = pcall(function() C4:SetVariable(name, tostring(value)) end)
+  if not ok then
+    print("[autoslidingdoor] SetVariable failed for " .. tostring(name) .. ": " .. tostring(err))
+  end
+end
+
 local function recordHistory(message)
   C4:RecordHistory("Info", STATE.mode, "Motorization", "Sliding Door", message)
 end
 
 local function publishMode()
   C4:UpdateProperty("Mode", STATE.mode)
-  C4:SetVariable("MODE", STATE.mode)
+  setVar(VAR.MODE, STATE.mode)
   updateNavigatorTile()
   updateKeypadLeds()
 end
 
 local function publishDoor()
   C4:UpdateProperty("Door State", STATE.door)
-  C4:SetVariable("DOOR_STATE", STATE.door)
+  setVar(VAR.DOOR_STATE, STATE.door)
 end
 
 -- ============================================================================
@@ -660,6 +691,7 @@ end
 function OnDriverInit()
   -- Reset Properties safe defaults first (XML defaults are not always populated yet)
   refreshConfig()
+  initVariables()   -- issue #3: before OnDriverLateInit's first setVar()
   C4:UpdateProperty("Driver Version", DRIVER_VERSION)
   C4:UpdateProperty("Mode", "Off")
   C4:UpdateProperty("Door State", "Unknown")
@@ -676,13 +708,10 @@ function OnDriverLateInit()
   -- Establish initial state — Off, both relays open. fireEvents=false so we don't
   -- spam "Mode Changed to Off" on Director restart unless mode actually was non-Off.
   STATE.mode = "Off"
-  publishMode()
+  publishMode()     -- seeds the MODE variable
+  publishDoor()     -- seeds DOOR_STATE (Unknown until the sensor reports)
   recomputeOpenRelay()
   recomputeArmRelay()
-
-  -- Initialize variables in C4's variable system so they show up in programming.
-  C4:SetVariable("MODE", STATE.mode)
-  C4:SetVariable("DOOR_STATE", STATE.door)
 
   -- Critical: query Director for current binding state. OnBindingChanged is
   -- not re-fired for bindings that existed before this driver code loaded

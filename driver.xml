@@ -5,8 +5,8 @@
   <model>Motion + Hold Experience Button</model>
   <creator>Matt Stein</creator>
   <created>05/26/2026 12:00 PM</created>
-  <modified>05/27/2026 09:00 AM</modified>
-  <version>5</version>
+  <modified>10/15/2026 07:00 PM</modified>
+  <version>6</version>
   <control>lua_gen</control>
   <driver>DriverWorks</driver>
   <auto_update>false</auto_update>

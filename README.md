@@ -315,10 +315,14 @@ For Composer "If…" programming blocks:
 
 ### Variables
 
-| Variable | Type | Values |
-|---|---|---|
-| `MODE` | string | `Off` / `Hold` / `Auto` |
-| `DOOR_STATE` | string | `Open` / `Closed` / `Unknown` |
+| Variable | Type | Values | Access |
+|---|---|---|---|
+| `MODE` | string | `Off` / `Hold` / `Auto` | read-only |
+| `DOOR_STATE` | string | `Open` / `Closed` / `Unknown` | read-only |
+
+Both are real Director variables (created with `C4:AddVariable` in `OnDriverInit` since v2.1.0, [#3](https://github.com/mattstein111/control4-autoslidingdoor/issues/3)). Other drivers can watch them (e.g. with `C4:RegisterVariableListener`, as [control4-mqttmirror](https://github.com/mattstein111/control4-mqttmirror) does to mirror the mode to MQTT / Home Assistant), and Composer programming can read them. They are **read-only**: change the mode with the `Set Mode to …` actions, which also drive the relays, tile and LEDs.
+
+> Before v2.1.0 the driver wrote these names with `C4:SetVariable` but never created them, so the writes were silent no-ops and the variables never appeared in Composer, despite being documented. The `Mode` / `Door State` properties and conditions always worked.
 
 ### Properties
 
@@ -407,6 +411,7 @@ Set the **Debug Mode** property to `On`. Verbose output prints to Composer's Lua
 |---|---|---|
 | Mode-changed event doesn't fire | Mode wasn't actually transitioning (re-set to same mode is a no-op) | Confirm starting mode; check the Mode property |
 | Door state stuck on `Unknown` | `Door Contact` connection isn't wired (or not detected) | Check the `Contact Status` property; rewire if needed |
+| `MODE` / `DOOR_STATE` missing from Composer Programming variables | Driver older than v2.1.0 (variables were never created, [#3](https://github.com/mattstein111/control4-autoslidingdoor/issues/3)) | Update to v2.1.0+; confirm the `Driver Version` property |
 | Driver looks dead after Composer install | Bindings not detected on reload | Already fixed in v2.0.1 ([#1](https://github.com/mattstein111/control4-autoslidingdoor/issues/1)); confirm `<version>` ≥ 5 |
 | Navigator tile icon doesn't swap | State IDs mismatch | Should be `Mode_Off` / `Mode_Hold` / `Mode_Auto`; verify in `driver.xml` |
 | Keypad LEDs don't update | Button not bound to a BUTTON_LINK connection, or keypad proxy doesn't support `BUTTON_COLORS` | Verify the binding; check the keypad driver's capabilities |
@@ -423,6 +428,7 @@ control4-autoslidingdoor/
 ├── driver.xml                     # Composer-facing manifest
 ├── driver.lua                     # Runtime logic (Lua 5.1)
 ├── build.sh                       # Builds autoslidingdoor.c4z
+├── tests/                         # Offline mock-C4 test suite (see Testing)
 ├── README.md                      # This file
 ├── CHANGELOG.md
 ├── LICENSE
@@ -451,6 +457,32 @@ Regenerate PNG ladders after editing source SVGs:
 ```sh
 ./src/icons/render.sh
 ```
+
+### Testing
+
+```sh
+./tests/run_tests.sh
+```
+
+Runs `xmllint` / `luac -p`, then the offline test suite under **LuaJIT** (Lua 5.1 semantics, the same as Director) and **stock Lua**, whichever are installed (`brew install luajit lua`).
+
+The suite loads the real `driver.lua` into a mock Control4 environment (`tests/mock_c4.lua`): a strict `C4` object, `Properties` seeded from `driver.xml` defaults, controllable timers and bindings. The mock models the failures that are **silent** on a real controller and turns them into test failures:
+
+| Silent on Director | Loud in the mock |
+|---|---|
+| `C4:SetVariable` on a variable never created with `AddVariable` (no-op) | recorded violation, so the test fails |
+| `C4:FireEvent` with a name not declared in `driver.xml` `<events>` | recorded violation |
+| `C4:RecordHistory` with ≠ 4 arguments (returns `nil`, stores nothing) | returns `nil`, call kept in `history_rejected` |
+| A `C4:` API the mock doesn't model | raises immediately, so no test passes by accident |
+
+Every test automatically fails if the mock recorded a violation. Files:
+
+| File | Covers |
+|---|---|
+| `tests/test_baseline.lua` | The pre-existing contract: relays, tile icon, keypad LEDs, events, gesture decoder, debounce, Hold auto-release, no stray globals |
+| `tests/test_variables.lua` | `MODE` / `DOOR_STATE` Director variables ([#3](https://github.com/mattstein111/control4-autoslidingdoor/issues/3)) |
+
+The mock is not Director: it can't prove Composer renders something, or that a binding really fires. The hardware checks in the [manual test plan](#manual-test-plan) still apply. What it does well is catch regressions and the silent-failure classes above before a `.c4z` reaches the controller.
 
 ### Versioning
 

@@ -1,0 +1,317 @@
+--[[
+  Mock Control4 DriverWorks environment for offline testing of driver.lua.
+
+  Runs under LuaJIT (Lua 5.1 semantics, matching Director's interpreter) and
+  under stock Lua 5.2+. Each call to M.new() builds a fresh, isolated sandbox:
+  a global `C4` object, a `Properties` table seeded from driver.xml defaults,
+  and a captured `print`. The real driver.lua is then loaded into that sandbox.
+
+  The mock deliberately models the *silent* Director failure modes this driver
+  has been bitten by, and records them as "violations" so tests can fail loudly
+  where the real controller fails quietly:
+
+    * C4:SetVariable on a variable that was never created with AddVariable
+      (issue #3 — a no-op on Director).
+    * C4:RecordHistory with more than four arguments returns nil and stores
+      nothing (issue #4, c4-conventions §2).
+    * C4:FireEvent with a name not declared in driver.xml <events>.
+
+  Any C4 method the mock does not implement raises immediately, so a test
+  cannot pass by accidentally exercising an unmodelled API.
+--]]
+
+local M = {}
+
+-- ---------------------------------------------------------------------------
+-- Paths
+-- ---------------------------------------------------------------------------
+
+local function repoRoot()
+  -- tests/mock_c4.lua → repo root is the parent of this file's directory
+  local src = debug.getinfo(1, "S").source:sub(2)
+  local dir = src:match("^(.*)/tests/[^/]*$") or "."
+  return dir
+end
+
+M.ROOT = repoRoot()
+
+local function readFile(path)
+  local f = assert(io.open(path, "rb"))
+  local s = f:read("*a")
+  f:close()
+  return s
+end
+
+-- ---------------------------------------------------------------------------
+-- driver.xml parsing (just enough for property defaults and event names)
+-- ---------------------------------------------------------------------------
+
+local function parseDriverXml()
+  local xml = readFile(M.ROOT .. "/driver.xml")
+  local props, events = {}, {}
+
+  local propsBlock = xml:match("<properties>(.-)</properties>") or ""
+  for block in propsBlock:gmatch("<property>(.-)</property>") do
+    local name = block:match("<name>(.-)</name>")
+    local dflt = block:match("<default>(.-)</default>") or ""
+    if name then props[name] = dflt end
+  end
+
+  local eventsBlock = xml:match("<events>(.-)</events>") or ""
+  for block in eventsBlock:gmatch("<event>(.-)</event>") do
+    local name = block:match("<name>(.-)</name>")
+    if name then events[name] = true end
+  end
+
+  return props, events, xml
+end
+
+-- ---------------------------------------------------------------------------
+-- Sandbox
+-- ---------------------------------------------------------------------------
+
+function M.new(opts)
+  opts = opts or {}
+
+  local propDefaults, declaredEvents, xmlText = parseDriverXml()
+
+  local env           -- current driver global environment (see freshEnv)
+  local log = {
+    calls       = {},   -- every C4 call: { name=, args={...} }
+    printed     = {},   -- captured print() lines
+    violations  = {},   -- silent-on-Director failures, as strings
+    proxy       = {},   -- SendToProxy: { id=, cmd=, params=, mode= }
+    events      = {},   -- FireEvent names, in order
+    history     = {},   -- RecordHistory calls that STORED (returned a UUID)
+    history_rejected = {}, -- RecordHistory calls that did NOT store
+    registered_events = {}, -- RegisterEvents XML payloads
+  }
+
+  local variables = {}      -- name -> { value=, type=, readonly=, hidden= }
+  local timers = {}         -- id -> { interval=, units=, rep= }
+  local nextTimer = 1000
+  local nextUuid = 1
+  local bindings = opts.bindings or {} -- bindingId -> provider binding (0/nil = unbound)
+
+  local function violate(msg)
+    log.violations[#log.violations + 1] = msg
+  end
+
+  local C4impl = {}
+
+  function C4impl:AddVariable(name, value, vtype, readonly, hidden)
+    if type(name) ~= "string" or name == "" then
+      error("AddVariable: identifier should be a string", 2)
+    end
+    if variables[name] then return false end
+    variables[name] = {
+      value = tostring(value), type = vtype,
+      readonly = readonly, hidden = hidden,
+    }
+    return true
+  end
+
+  function C4impl:SetVariable(name, value)
+    if type(name) ~= "string" and type(name) ~= "number" then
+      -- Mirrors Director: "identifier should be a number/string"
+      error("identifier should be a number/string", 2)
+    end
+    local v = variables[name]
+    if not v then
+      violate("SetVariable on uncreated variable '" .. tostring(name) .. "' (no-op on Director)")
+      return
+    end
+    v.value = tostring(value)
+  end
+
+  function C4impl:GetVariable(_deviceId, name)
+    local v = variables[name]
+    return v and v.value or nil
+  end
+
+  -- Properties live outside env so they survive h.reload(), as they do on
+  -- Director across a driver update.
+  local props = {}
+
+  function C4impl:UpdateProperty(name, value)
+    props[name] = value
+  end
+
+  function C4impl:SendToProxy(id, cmd, params, mode)
+    log.proxy[#log.proxy + 1] = { id = id, cmd = cmd, params = params, mode = mode }
+  end
+
+  function C4impl:FireEvent(name)
+    if not declaredEvents[name] then
+      violate("FireEvent '" .. tostring(name) .. "' not declared in driver.xml <events>")
+    end
+    log.events[#log.events + 1] = name
+  end
+
+  function C4impl:RecordHistory(...)
+    local n = select("#", ...)
+    local args = { ... }
+    if n ~= 4 then
+      -- c4-conventions §2: only the 4-arg form stores; returns nil otherwise.
+      log.history_rejected[#log.history_rejected + 1] = { n = n, args = args }
+      return nil
+    end
+    local uuid = string.format("00000000-0000-0000-0000-%012d", nextUuid)
+    nextUuid = nextUuid + 1
+    log.history[#log.history + 1] = {
+      severity = args[1], type = args[2], category = args[3], subcategory = args[4],
+      uuid = uuid,
+    }
+    return uuid
+  end
+
+  function C4impl:RegisterEvents(xml)
+    log.registered_events[#log.registered_events + 1] = xml
+  end
+
+  function C4impl:AddTimer(interval, units, rep)
+    nextTimer = nextTimer + 1
+    timers[nextTimer] = { interval = interval, units = units, rep = rep }
+    return nextTimer
+  end
+
+  function C4impl:KillTimer(id)
+    timers[id] = nil
+  end
+
+  function C4impl:GetDeviceID() return opts.deviceId or 42 end
+  function C4impl:GetProxyDevices() return opts.proxyId or 43 end
+
+  function C4impl:GetBoundProviderBinding(_deviceId, bindingId)
+    return bindings[bindingId] or 0
+  end
+
+  function C4impl:FileSetDir(_dir) return true end
+
+  -- Strict proxy: record every call; unknown methods raise.
+  local C4 = setmetatable({}, {
+    __index = function(_, k)
+      local f = C4impl[k]
+      if not f then
+        error("mock C4: unmodelled API C4:" .. tostring(k), 2)
+      end
+      return function(self, ...)
+        log.calls[#log.calls + 1] = { name = k, args = { ... } }
+        return f(self, ...)
+      end
+    end,
+  })
+
+  for k, v in pairs(propDefaults) do props[k] = v end
+  if opts.properties then
+    for k, v in pairs(opts.properties) do props[k] = v end
+  end
+
+  -- Build a fresh global environment for one load of driver.lua. Called again
+  -- by h.reload() to model a driver update in place: all Lua state is lost,
+  -- but Director keeps variables, properties and bindings.
+  local function freshEnv()
+    local e = {}
+    e.__C4impl = C4impl   -- tests may override behaviour per case
+    e.C4 = C4
+    e.Properties = props
+    e.print = function(...)
+      local parts = {}
+      for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+      log.printed[#log.printed + 1] = table.concat(parts, "\t")
+    end
+    return setmetatable(e, { __index = _G })
+  end
+  env = freshEnv()
+
+  -- -------------------------------------------------------------------------
+  -- Test-side handle
+  -- -------------------------------------------------------------------------
+  local h = {
+    env = env, log = log, variables = variables, timers = timers,
+    bindings = bindings, xml = xmlText, declaredEvents = declaredEvents,
+  }
+
+  function h.load()
+    local path = M.ROOT .. "/driver.lua"
+    local chunk
+    if setfenv then
+      chunk = assert(loadfile(path))
+      setfenv(chunk, env)
+    else
+      chunk = assert(loadfile(path, "t", env))
+    end
+    chunk()
+    return h
+  end
+
+  -- Model a driver update in place (Composer "Update Driver", or the
+  -- auto-updater's UpdateProjectC4i): driver.lua is re-run in a brand-new Lua
+  -- state, timers die with the old VM, while variables, properties and
+  -- bindings persist in Director. Then the normal init sequence runs.
+  function h.reload()
+    if env.OnDriverDestroyed then env.OnDriverDestroyed() end
+    for id in pairs(timers) do timers[id] = nil end
+    env = freshEnv()
+    h.env = env
+    return h.boot()
+  end
+
+  -- Simulate Director's init sequence.
+  function h.boot()
+    h.load()
+    env.OnDriverInit()
+    if env.OnDriverLateInit then env.OnDriverLateInit() end
+    return h
+  end
+
+  function h.bind(bindingId, provider)
+    bindings[bindingId] = provider or 1
+    env.OnBindingChanged(bindingId, "", true)
+  end
+
+  function h.var(name)
+    local v = variables[name]
+    return v and v.value or nil
+  end
+
+  -- Fire one specific timer id (as Director would on expiry).
+  function h.fire(id)
+    assert(timers[id], "timer " .. tostring(id) .. " is not active")
+    if not timers[id].rep then timers[id] = nil end
+    env.OnTimerExpired(id)
+  end
+
+  -- Fire the most recently created active timer.
+  function h.fireLatest()
+    local best
+    for id in pairs(timers) do if not best or id > best then best = id end end
+    assert(best, "no active timers")
+    h.fire(best)
+  end
+
+  function h.activeTimerCount()
+    local n = 0
+    for _ in pairs(timers) do n = n + 1 end
+    return n
+  end
+
+  -- Last SendToProxy to a binding (optionally filtered by command).
+  function h.lastProxy(id, cmd)
+    for i = #log.proxy, 1, -1 do
+      local p = log.proxy[i]
+      if p.id == id and (cmd == nil or p.cmd == cmd) then return p end
+    end
+  end
+
+  function h.clearLogs()
+    for _, k in ipairs({ "calls", "printed", "proxy", "events", "history",
+                         "history_rejected" }) do
+      log[k] = {}
+    end
+  end
+
+  return h
+end
+
+return M
