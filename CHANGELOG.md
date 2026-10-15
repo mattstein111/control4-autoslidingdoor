@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.2.0-beta.2 — 2026-10-15
+
+- Version-only bump: release **N+1** for the on-hardware auto-update smoke test ([#5](https://github.com/mattstein111/control4-autoslidingdoor/issues/5)). Install `v2.2.0-beta.1` from its release asset, set `Auto Update` = Beta, and the driver should update itself to this release. No functional changes.
+- Driver `<version>` 8 → 9.
+
 ## v2.2.0-beta.1 — 2026-10-15
 
 - **New [#5](https://github.com/mattstein111/control4-autoslidingdoor/issues/5): self-installing auto-update from GitHub Releases.** Install once through Composer; new releases then install themselves in place, keeping bindings, properties and programming. Ported from control4-frigate's updater (single-driver variant) with the frigate #33 improvements.

@@ -6,7 +6,7 @@
   See docs/superpowers/specs/ for the full design spec.
 --]]
 
-local DRIVER_VERSION = "2.2.0-beta.1"
+local DRIVER_VERSION = "2.2.0-beta.2"
 
 -- Auto-update (issue #5). The GitHub release tag for this build is
 -- "v" .. DRIVER_VERSION; release CI refuses to publish a tag that doesn't
