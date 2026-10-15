@@ -324,6 +324,18 @@ Both are real Director variables (created with `C4:AddVariable` in `OnDriverInit
 
 > Before v2.1.0 the driver wrote these names with `C4:SetVariable` but never created them, so the writes were silent no-ops and the variables never appeared in Composer, despite being documented. The `Mode` / `Door State` properties and conditions always worked.
 
+### History
+
+The driver writes to the device's History in the Control4 app (requires the **History agent**; deep-linking from notifications also needs the **Navigation agent**). Category **`Locks & Sensors`**, subcategory **`Sliding Door`**:
+
+| History entry | Severity | When |
+|---|---|---|
+| `Mode Changed to Off` / `Hold` / `Auto` | Info | Same moments as the matching Events (actual transitions only) |
+| `Door Opened` / `Door Closed` | Info | Contact sensor change, post-debounce |
+| `Door Still Open` | Warning | `Still Open Time` elapsed with the door open |
+
+Since v2.1.1 ([#4](https://github.com/mattstein111/control4-autoslidingdoor/issues/4)), every type is declared with `C4:RegisterEvents` at startup and recorded with the four-argument `C4:RecordHistory`. Both are needed for the app to show an entry ([c4-conventions §2](https://github.com/mattstein111/Claude-Code-Setup)). Earlier versions recorded under `Motorization` / `Sliding Door` without registering, so entries were at best visible in the History agent's data view, never in the app.
+
 ### Properties
 
 <details>
@@ -411,6 +423,7 @@ Set the **Debug Mode** property to `On`. Verbose output prints to Composer's Lua
 |---|---|---|
 | Mode-changed event doesn't fire | Mode wasn't actually transitioning (re-set to same mode is a no-op) | Confirm starting mode; check the Mode property |
 | Door state stuck on `Unknown` | `Door Contact` connection isn't wired (or not detected) | Check the `Contact Status` property; rewire if needed |
+| Nothing in the device's History in the app | History agent missing, or driver older than v2.1.1 ([#4](https://github.com/mattstein111/control4-autoslidingdoor/issues/4)) | Add the History agent; update the driver. Check Lua output for `RecordHistory did not store` or `RegisterEvents …` warnings (printed even with Debug Mode Off) |
 | `MODE` / `DOOR_STATE` missing from Composer Programming variables | Driver older than v2.1.0 (variables were never created, [#3](https://github.com/mattstein111/control4-autoslidingdoor/issues/3)) | Update to v2.1.0+; confirm the `Driver Version` property |
 | Driver looks dead after Composer install | Bindings not detected on reload | Already fixed in v2.0.1 ([#1](https://github.com/mattstein111/control4-autoslidingdoor/issues/1)); confirm `<version>` ≥ 5 |
 | Navigator tile icon doesn't swap | State IDs mismatch | Should be `Mode_Off` / `Mode_Hold` / `Mode_Auto`; verify in `driver.xml` |
@@ -472,7 +485,8 @@ The suite loads the real `driver.lua` into a mock Control4 environment (`tests/m
 |---|---|
 | `C4:SetVariable` on a variable never created with `AddVariable` (no-op) | recorded violation, so the test fails |
 | `C4:FireEvent` with a name not declared in `driver.xml` `<events>` | recorded violation |
-| `C4:RecordHistory` with ≠ 4 arguments (returns `nil`, stores nothing) | returns `nil`, call kept in `history_rejected` |
+| `C4:RecordHistory` with ≠ 4 arguments (the 5-arg *table* form stores nothing on OS 3.4.3) | returns `nil`, recorded violation |
+| `C4:RecordHistory` tuple with no matching `C4:RegisterEvents` registration (stored, but hidden in the app) | recorded violation |
 | A `C4:` API the mock doesn't model | raises immediately, so no test passes by accident |
 
 Every test automatically fails if the mock recorded a violation. Files:
@@ -481,6 +495,7 @@ Every test automatically fails if the mock recorded a violation. Files:
 |---|---|
 | `tests/test_baseline.lua` | The pre-existing contract: relays, tile icon, keypad LEDs, events, gesture decoder, debounce, Hold auto-release, no stray globals |
 | `tests/test_variables.lua` | `MODE` / `DOOR_STATE` Director variables ([#3](https://github.com/mattstein111/control4-autoslidingdoor/issues/3)) |
+| `tests/test_history.lua` | History: four-argument `RecordHistory`, `RegisterEvents` registration, fault containment ([#4](https://github.com/mattstein111/control4-autoslidingdoor/issues/4)) |
 
 The mock is not Director: it can't prove Composer renders something, or that a binding really fires. The hardware checks in the [manual test plan](#manual-test-plan) still apply. What it does well is catch regressions and the silent-failure classes above before a `.c4z` reaches the controller.
 

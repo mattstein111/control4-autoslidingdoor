@@ -12,8 +12,14 @@
 
     * C4:SetVariable on a variable that was never created with AddVariable
       (issue #3 — a no-op on Director).
-    * C4:RecordHistory with more than four arguments returns nil and stores
-      nothing (issue #4, c4-conventions §2).
+    * C4:RecordHistory with other than four arguments returns nil and stores
+      nothing (issue #4). On OS 3.4.3 the five-argument *table* form is
+      proven not to store; the five-argument *string* form stored in frigate
+      v0.8.13. The mock treats any non-four-argument call as a violation,
+      because four arguments is the only form proven in both directions.
+    * C4:RecordHistory storing a (category, subcategory, type) tuple that no
+      C4:RegisterEvents call registered: stored, but never rendered in the
+      Control4 app (frigate #24, c4-conventions §2).
     * C4:FireEvent with a name not declared in driver.xml <events>.
 
   Any C4 method the mock does not implement raises immediately, so a test
@@ -64,6 +70,17 @@ local function parseDriverXml()
   end
 
   return props, events, xml
+end
+
+-- The device id the driver should register history against, given what the
+-- mock's GetProxyDevices returns (default { [43] = true }).
+function M.proxyDeviceIdOf(proxyDevices)
+  if proxyDevices == nil then return 43 end
+  if type(proxyDevices) == "table" then
+    for id in pairs(proxyDevices) do return id end
+    return nil
+  end
+  return tonumber(proxyDevices)
 end
 
 -- ---------------------------------------------------------------------------
@@ -148,13 +165,28 @@ function M.new(opts)
     log.events[#log.events + 1] = name
   end
 
+  -- Registered history tuples: "deviceId|category|subcategory|type" -> true
+  local registered = {}
+
+  local function xmlUnescape(str)
+    return (str:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"')
+               :gsub("&apos;", "'"):gsub("&amp;", "&"))
+  end
+
   function C4impl:RecordHistory(...)
     local n = select("#", ...)
     local args = { ... }
     if n ~= 4 then
-      -- c4-conventions §2: only the 4-arg form stores; returns nil otherwise.
+      violate("RecordHistory called with " .. n .. " args (only the 4-arg form is proven to store)")
       log.history_rejected[#log.history_rejected + 1] = { n = n, args = args }
       return nil
+    end
+    -- Must match a registration against THIS driver's proxy device.
+    local key = table.concat({ tostring(M.proxyDeviceIdOf(opts.proxyDevices)),
+                               tostring(args[3]), tostring(args[4]), tostring(args[2]) }, "|")
+    if not registered[key] then
+      violate("RecordHistory tuple not registered via RegisterEvents (stored but invisible in app): "
+              .. key)
     end
     local uuid = string.format("00000000-0000-0000-0000-%012d", nextUuid)
     nextUuid = nextUuid + 1
@@ -165,8 +197,23 @@ function M.new(opts)
     return uuid
   end
 
+  -- Parses the <events><device/><categories>... shape used by frigate and
+  -- c4-conventions §2. Returns 0 (Director's success code).
   function C4impl:RegisterEvents(xml)
     log.registered_events[#log.registered_events + 1] = xml
+    local dev = xml:match('<device%s+id="([^"]*)"')
+    if not dev or dev == "" or dev == "nil" then
+      violate("RegisterEvents XML has no device id")
+    end
+    for catName, catBody in xml:gmatch('<category%s+name="([^"]*)">(.-)</category>') do
+      for subName, subBody in catBody:gmatch('<subcategory%s+name="([^"]*)">(.-)</subcategory>') do
+        for typeName in subBody:gmatch('<type%s+name="([^"]*)"') do
+          registered[table.concat({ tostring(dev), xmlUnescape(catName),
+                                    xmlUnescape(subName), xmlUnescape(typeName) }, "|")] = true
+        end
+      end
+    end
+    return 0
   end
 
   function C4impl:AddTimer(interval, units, rep)
@@ -180,7 +227,12 @@ function M.new(opts)
   end
 
   function C4impl:GetDeviceID() return opts.deviceId or 42 end
-  function C4impl:GetProxyDevices() return opts.proxyId or 43 end
+  -- Frigate (validated on OS 3.4.3) treats the return as a table keyed by
+  -- proxy device id. opts.proxyDevices lets a test return another shape.
+  function C4impl:GetProxyDevices()
+    if opts.proxyDevices ~= nil then return opts.proxyDevices end
+    return { [43] = true }
+  end
 
   function C4impl:GetBoundProviderBinding(_deviceId, bindingId)
     return bindings[bindingId] or 0
@@ -229,6 +281,7 @@ function M.new(opts)
   -- -------------------------------------------------------------------------
   local h = {
     env = env, log = log, variables = variables, timers = timers,
+    registered = registered,
     bindings = bindings, xml = xmlText, declaredEvents = declaredEvents,
   }
 

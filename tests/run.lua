@@ -48,7 +48,8 @@ function T.driver(opts)
   opts = opts or {}
   local bindings = {}
   for _, id in ipairs(opts.bound or {}) do bindings[id] = 1 end
-  local h = mock.new({ bindings = bindings, properties = opts.properties })
+  local h = mock.new({ bindings = bindings, properties = opts.properties,
+                       proxyDevices = opts.proxyDevices })
   if opts.noBoot then h.load() else h.boot() end
   T._current = h
   return h
@@ -59,6 +60,7 @@ function T.allowViolations() T._allow = true end
 local files = {
   "test_baseline",
   "test_variables",
+  "test_history",
 }
 
 for _, f in ipairs(files) do

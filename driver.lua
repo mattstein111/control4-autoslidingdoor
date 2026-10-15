@@ -6,7 +6,7 @@
   See docs/superpowers/specs/ for the full design spec.
 --]]
 
-local DRIVER_VERSION = "2.1.0"
+local DRIVER_VERSION = "2.1.1"
 
 -- Connection IDs (must match driver.xml)
 local PROXY_ID            = 5001
@@ -28,6 +28,37 @@ local BUTTON_LINK_IDS = { BL_OPEN, BL_OFF, BL_HOLD, BL_AUTO }
 local VAR = {
   MODE       = "MODE",        -- "Off" | "Hold" | "Auto"
   DOOR_STATE = "DOOR_STATE",  -- "Open" | "Closed" | "Unknown"
+}
+
+-- Device history (issue #4). For an entry to appear in the Control4 app's
+-- History, two things must hold (c4-conventions §2, validated end to end in
+-- control4-frigate #24 on OS 3.4.3):
+--   1. Call the FOUR-argument form C4:RecordHistory(severity, eventType,
+--      category, subcategory). There is no description parameter; eventType is
+--      the text the app displays. The optional fifth argument is a metadata
+--      table, and passing one stops the record being stored on OS 3.4.3.
+--   2. Register the (category, subcategory, type) tuple with
+--      C4:RegisterEvents. Navigator silently hides stored records that match
+--      no registration (they still show in the History agent's data tab).
+-- Recorder and registration share these constants so they cannot drift.
+-- Category matches Control4's stock relay door drivers ("Locks & Sensors" /
+-- "Door (Relay)"), so entries sit next to other doors in the app's filter.
+local HISTORY_CATEGORY    = "Locks & Sensors"
+local HISTORY_SUBCATEGORY = "Sliding Door"
+local HISTORY = {
+  MODE = {                                   -- keyed by STATE.mode
+    Off  = "Mode Changed to Off",
+    Hold = "Mode Changed to Hold",
+    Auto = "Mode Changed to Auto",
+  },
+  DOOR_OPENED     = "Door Opened",
+  DOOR_CLOSED     = "Door Closed",
+  DOOR_STILL_OPEN = "Door Still Open",
+}
+-- Every type recordHistory() may be called with. All are registered.
+local HISTORY_TYPES = {
+  HISTORY.MODE.Off, HISTORY.MODE.Hold, HISTORY.MODE.Auto,
+  HISTORY.DOOR_OPENED, HISTORY.DOOR_CLOSED, HISTORY.DOOR_STILL_OPEN,
 }
 
 -- State (runtime, not persisted)
@@ -243,8 +274,76 @@ local function setVar(name, value)
   end
 end
 
-local function recordHistory(message)
-  C4:RecordHistory("Info", STATE.mode, "Motorization", "Sliding Door", message)
+-- Record one device-history entry. eventType must be one of HISTORY_TYPES
+-- (anything else is stored but never shown in the app). The UUID return value
+-- is the only signal of whether Director stored the record, so a nil is always
+-- reported, not just in debug mode. pcall'd so a history fault can never
+-- abort the state handler that called it.
+local function recordHistory(eventType, severity)
+  severity = severity or "Info"
+  local ok, uuid = pcall(function()
+    return C4:RecordHistory(severity, eventType, HISTORY_CATEGORY, HISTORY_SUBCATEGORY)
+  end)
+  if ok and uuid ~= nil and uuid ~= "" then
+    dbg("history recorded:", eventType, "(" .. tostring(uuid) .. ")")
+  elseif ok then
+    print("[autoslidingdoor] RecordHistory did not store '" .. tostring(eventType)
+          .. "' (nil UUID). Is the History agent installed?")
+  else
+    print("[autoslidingdoor] RecordHistory error for '" .. tostring(eventType)
+          .. "': " .. tostring(uuid))
+  end
+end
+
+local function xmlEscape(str)
+  return (tostring(str):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+                       :gsub('"', "&quot;"):gsub("'", "&apos;"))
+end
+
+-- The proxy device id that history is registered against. Frigate (validated
+-- on OS 3.4.3) treats C4:GetProxyDevices() as a table keyed by device id; a
+-- bare number is accepted too in case a firmware returns the single id.
+local function getProxyDeviceId()
+  local ok, devs = pcall(function() return C4:GetProxyDevices() end)
+  if not ok then return nil end
+  if type(devs) == "number" then return devs end
+  if type(devs) == "string" then return tonumber(devs) end
+  if type(devs) == "table" then
+    for id in pairs(devs) do return id end
+  end
+  return nil
+end
+
+-- Declare every history type this device records, so Navigator renders them.
+-- Called on every driver load from OnDriverLateInit.
+local function registerHistoryEvents()
+  local deviceId = getProxyDeviceId()
+  if not deviceId then
+    print("[autoslidingdoor] RegisterEvents skipped: no proxy device id. "
+          .. "History will be stored but not shown in the Control4 app.")
+    return
+  end
+  local types = {}
+  for i = 1, #HISTORY_TYPES do
+    types[i] = '<type name="' .. xmlEscape(HISTORY_TYPES[i]) .. '"/>'
+  end
+  local xml = '<events>'
+    .. '<device id="' .. tostring(deviceId) .. '"/>'
+    .. '<categories><category name="' .. xmlEscape(HISTORY_CATEGORY) .. '">'
+    .. '<subcategories><subcategory name="' .. xmlEscape(HISTORY_SUBCATEGORY) .. '">'
+    .. '<types>' .. table.concat(types) .. '</types>'
+    .. '</subcategory></subcategories>'
+    .. '</category></categories></events>'
+  local ok, result = pcall(function() return C4:RegisterEvents(xml) end)
+  -- 0 is Director's success code (as checked in control4-frigate). Anything
+  -- else, nil included, is reported: an unregistered device's history is
+  -- stored but never shown in the app, and that is otherwise invisible.
+  if ok and result == 0 then
+    dbg("registered", #HISTORY_TYPES, "history types for device", deviceId)
+  else
+    print("[autoslidingdoor] RegisterEvents returned " .. tostring(result)
+          .. ". History may not appear in the Control4 app.")
+  end
 end
 
 local function publishMode()
@@ -298,7 +397,7 @@ local function SetMode(newMode, fireEvents)
     local evt = "Mode Changed to " .. newMode
     dbg("FireEvent", evt)
     C4:FireEvent(evt)
-    recordHistory("Mode changed to " .. newMode)
+    recordHistory(HISTORY.MODE[newMode])
   end
 
   -- 6. Arm Hold auto-release if configured
@@ -442,11 +541,11 @@ local function commitDoorState(newDoor)
 
   if newDoor == "Open" then
     C4:FireEvent("Door Opened")
-    C4:RecordHistory("Info", "Open", "Motorization", "Sliding Door", "Door opened")
+    recordHistory(HISTORY.DOOR_OPENED)
     startStillOpenWatchdog()
   elseif newDoor == "Closed" then
     C4:FireEvent("Door Closed")
-    C4:RecordHistory("Info", "Closed", "Motorization", "Sliding Door", "Door closed")
+    recordHistory(HISTORY.DOOR_CLOSED)
     cancelStillOpenTimer()
   end
 end
@@ -635,8 +734,7 @@ function OnTimerExpired(idTimer)
     dbg("still-open timer expired")
     STATE.still_open_timer = nil
     C4:FireEvent("Still Open")
-    C4:RecordHistory("Info", "Still Open", "Motorization", "Sliding Door",
-                     "Door still open after " .. tostring(CFG.still_open_seconds) .. "s")
+    recordHistory(HISTORY.DOOR_STILL_OPEN, "Warning")
     return
   end
 
@@ -704,6 +802,9 @@ function OnDriverLateInit()
   -- Unlock FileSetDir for any future self-update capability (per c4-conventions §3a)
   local ok, err = pcall(function() C4:FileSetDir("c29tZXNwZWNpYWxrZXk=++11") end)
   if not ok then dbg("FileSetDir handshake error:", err) end
+
+  -- Issue #4: declare history types before anything can record one.
+  registerHistoryEvents()
 
   -- Establish initial state — Off, both relays open. fireEvents=false so we don't
   -- spam "Mode Changed to Off" on Director restart unless mode actually was non-Off.

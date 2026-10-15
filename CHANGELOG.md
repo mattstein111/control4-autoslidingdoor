@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.1.1 — 2026-10-15
+
+- **Fix [#4](https://github.com/mattstein111/control4-autoslidingdoor/issues/4): device history now shows in the Control4 app.** The driver never called `C4:RegisterEvents`, and Navigator only renders history whose (category, subcategory, type) is registered. It also recorded with a five-argument `C4:RecordHistory` (a description string as the fifth argument), which isn't the proven form. Now:
+  - every type is registered at startup against the proxy device;
+  - every record uses the four-argument form through one `recordHistory()` helper, and a `nil` UUID (not stored) is always logged;
+  - category/subcategory changed `Motorization` / `Sliding Door` → **`Locks & Sensors` / `Sliding Door`** (the category Control4's stock relay door drivers use; their subcategories are e.g. `Door (Relay)`);
+  - types are now self-describing, since `eventType` is the text the app shows: `Mode Changed to Off/Hold/Auto`, `Door Opened`, `Door Closed`, and `Door Still Open` (now severity **Warning**). Previously: `Off`/`Hold`/`Auto`/`Open`/`Closed`/`Still Open`.
+- History and registration calls are `pcall`-guarded, so a history fault can't abort a mode or door-state handler.
+- Test suite: the mock now fails any non-four-argument `RecordHistory` and any unregistered history tuple. New `tests/test_history.lua` (13 cases; 34 total).
+- Driver `<version>` 6 → 7.
+
 ## v2.1.0 — 2026-10-15
 
 - **Fix [#3](https://github.com/mattstein111/control4-autoslidingdoor/issues/3): `MODE` and `DOOR_STATE` are now real Director variables.** They have been documented since v1, but the driver only ever called `C4:SetVariable` and never `C4:AddVariable`, so every write was a silent no-op and the variables never appeared in Composer. They're now created in `OnDriverInit` as read-only `STRING` variables, seeded on every init, and kept in step with the `Mode` / `Door State` properties. Other drivers can now watch the mode (unblocks [control4-mqttmirror #1](https://github.com/mattstein111/control4-mqttmirror/issues/1)).
